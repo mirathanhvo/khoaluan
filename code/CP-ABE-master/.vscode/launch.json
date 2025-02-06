@@ -1,0 +1,57 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "java",
+            "request": "launch",
+            "name": "Run Main Class",
+            "mainClass": "setup.Setup",
+            "projectName": "CP-ABE-master"
+          },
+          
+        {
+            "type": "java",
+            "name": "Current File",
+            "request": "launch",
+            "mainClass": "${file}"
+        },
+        {
+            "type": "java",
+            "name": "TypeACurveGenerator",
+            "request": "launch",
+            "mainClass": "it.unisa.dia.gas.plaf.jpbc.pairing.a.TypeACurveGenerator",
+            "projectName": "CP-ABE-master"
+        },
+        {
+            "type": "java",
+            "name": "TypeA1CurveGenerator",
+            "request": "launch",
+            "mainClass": "it.unisa.dia.gas.plaf.jpbc.pairing.a1.TypeA1CurveGenerator",
+            "projectName": "CP-ABE-master"
+        },
+        {
+            "type": "java",
+            "name": "TypeECurveGenerator",
+            "request": "launch",
+            "mainClass": "it.unisa.dia.gas.plaf.jpbc.pairing.e.TypeECurveGenerator",
+            "projectName": "CP-ABE-master"
+        },
+        {
+            "type": "java",
+            "name": "TypeFCurveGenerator",
+            "request": "launch",
+            "mainClass": "it.unisa.dia.gas.plaf.jpbc.pairing.f.TypeFCurveGenerator",
+            "projectName": "CP-ABE-master"
+        },
+        {
+            "type": "java",
+            "name": "Setup",
+            "request": "launch",
+            "mainClass": "setup.Setup",
+            "projectName": "CP-ABE-master"
+        }
+    ]
+}
