@@ -46,51 +46,43 @@ gint comp_string(gconstpointer a, gconstpointer b) {
     return strcmp(a, b);
 }
 
-void parse_args(int argc, char** argv) {
-    int i;
-    GSList* alist = 0;
-    GSList* ap;
-    int n;
-
-    for (i = 1; i < argc; i++) {
-        if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
-            printf("%s", usage);
-            exit(0);
-        } else if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--version")) {
-            printf("cpabe-keygen version 1.0\n");
-            exit(0);
-        } else if (!strcmp(argv[i], "-o") || !strcmp(argv[i], "--output")) {
-            if (++i >= argc) {
-                fprintf(stderr, "Error: --output requires a file name\n");
-                exit(1);
-            } else {
-                out_file = argv[i];
-            }
-        } else if (!strcmp(argv[i], "-d") || !strcmp(argv[i], "--deterministic")) {
-            core_set_rand_method(RAND_SEED);
-        } else if (!pub_file) {
-            pub_file = argv[i];
-        } else if (!msk_file) {
-            msk_file = argv[i];
-        } else {
-            alist = g_slist_append(alist, argv[i]);
-        }
+void keygen(g2_t sk, g1_t* d_i, bn_t msk, char** attributes, int attr_count) {
+    bn_t alpha, h, denom;
+    bn_null(alpha);
+    bn_null(h);
+    bn_null(denom);
+    bn_new(alpha);
+    bn_new(h);
+    bn_new(denom);
+    
+    g2_null(sk);
+    g2_new(sk);
+    g2_get_gen(sk);
+    
+    // Generate random alpha (master secret key)
+    bn_rand_mod(alpha, g1_get_ord());
+    g2_mul(sk, sk, alpha);
+    
+    for (int i = 0; i < attr_count; i++) {
+        g1_null(d_i[i]);
+        g1_new(d_i[i]);
+        g1_get_gen(d_i[i]);
+        
+        // Securely hash the attribute
+        uint8_t sha256_digest[32];
+        md_map_sh256(sha256_digest, (uint8_t*)attributes[i], strlen(attributes[i]));
+        bn_read_bin(h, sha256_digest, sizeof(sha256_digest));
+        bn_mod(h, h, g1_get_ord());  // Convert hash to valid integer in group order
+        
+        // Compute d_i = g1^(1 / (alpha + H(attribute_i)))
+        bn_add(denom, h, msk);
+        bn_mod_inv(denom, denom, g1_get_ord());  // Modular inverse
+        g1_mul(d_i[i], d_i[i], denom);
     }
-
-    if (!pub_file || !msk_file || !alist) {
-        fprintf(stderr, "%s", usage);
-        exit(1);
-    }
-
-    alist = g_slist_sort(alist, comp_string);
-    n = g_slist_length(alist);
-
-    attrs = malloc((n + 1) * sizeof(char*));
-    i = 0;
-    for (ap = alist; ap; ap = ap->next) {
-        attrs[i++] = ap->data;
-    }
-    attrs[i] = 0;
+    
+    bn_free(alpha);
+    bn_free(h);
+    bn_free(denom);
 }
 
 int main(int argc, char** argv) {
@@ -128,32 +120,30 @@ int main(int argc, char** argv) {
     bn_read(msk_fp, msk);
     fclose(msk_fp);
 
-    // Generate private key
-    bn_t r;
-    g1_t d;
-    bn_null(r);
-    g1_null(d);
-    bn_new(r);
-    g1_new(d);
+    // Generate attribute keys
+    g2_t sk;
+    g1_t* d_i = malloc(attr_count * sizeof(g1_t));
+    keygen(sk, d_i, msk, attrs, attr_count);
 
-    bn_rand_mod(r, g1_get_ord());
-    g1_mul(d, pk, r);
-
-    // Save private key
+    // Save secret key and attribute keys
     FILE* out_fp = fopen(out_file, "w");
     if (!out_fp) {
         printf("Error opening private key file.\n");
         core_clean();
         return 1;
     }
-    g1_write(out_fp, d);
+    g2_write(out_fp, sk);
+    for (int i = 0; i < attr_count; i++) {
+        g1_write(out_fp, d_i[i]);
+        g1_free(d_i[i]);
+    }
     fclose(out_fp);
 
     // Clean up
     bn_free(msk);
     g1_free(pk);
-    bn_free(r);
-    g1_free(d);
+    g2_free(sk);
+    free(d_i);
 
     core_clean();
     return 0;

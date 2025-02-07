@@ -2,8 +2,9 @@
 #include <string.h>
 #include <unistd.h>
 #include <glib.h>
-#include <pbc.h>
-#include <pbc_random.h>
+#include <relic.h>
+#include <openssl/aes.h>
+#include <openssl/evp.h>
 
 #include "bswabe.h"
 #include "common.h"
@@ -34,140 +35,175 @@ char* usage =
 /* "                          (only for performance evaluation)\n\n" */
 "";
 
-/* enum { */
-/* 	DEC_NAIVE, */
-/* 	DEC_FLATTEN, */
-/* 	DEC_MERGE, */
-/* } dec_strategy = DEC_MERGE;		 */
-
 char* pub_file   = 0;
 char* prv_file   = 0;
 char* in_file    = 0;
 char* out_file   = 0;
-/* int   no_opt_sat = 0; */
-/* int   report_ops = 0; */
 int   keep       = 0;
 
-/* int num_pairings = 0; */
-/* int num_exps     = 0; */
-/* int num_muls     = 0; */
+void parse_args(int argc, char** argv) {
+    int i;
 
-void
-parse_args( int argc, char** argv )
-{
-	int i;
+    for (i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
+            printf("%s", usage);
+            exit(0);
+        } else if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--version")) {
+            printf("cpabe-dec version 1.0\n");
+            exit(0);
+        } else if (!strcmp(argv[i], "-k") || !strcmp(argv[i], "--keep-input-file")) {
+            keep = 1;
+        } else if (!strcmp(argv[i], "-o") || !strcmp(argv[i], "--output")) {
+            if (i + 1 < argc) {
+                out_file = argv[++i];
+            } else {
+                printf("Error: Missing output file argument.\n");
+                exit(1);
+            }
+        } else if (argv[i][0] != '-') {
+            if (!pub_file) {
+                pub_file = argv[i];
+            } else if (!prv_file) {
+                prv_file = argv[i];
+            } else if (!in_file) {
+                in_file = argv[i];
+            } else {
+                printf("Error: Too many arguments.\n");
+                exit(1);
+            }
+        } else {
+            printf("Error: Unknown option %s.\n", argv[i]);
+            exit(1);
+        }
+    }
 
-	for( i = 1; i < argc; i++ )
-		if(      !strcmp(argv[i], "-h") || !strcmp(argv[i], "--help") )
-		{
-			printf("%s", usage);
-			exit(0);
-		}
-		else if( !strcmp(argv[i], "-v") || !strcmp(argv[i], "--version") )
-		{
-			printf(CPABE_VERSION, "-dec");
-			exit(0);
-		}
-		else if( !strcmp(argv[i], "-k") || !strcmp(argv[i], "--keep-input-file") )
-		{
-			keep = 1;
-		}
-		else if( !strcmp(argv[i], "-o") || !strcmp(argv[i], "--output") )
-		{
-			if( ++i >= argc )
-				die(usage);
-			else
-				out_file = argv[i];
-		}
-		else if( !strcmp(argv[i], "-d") || !strcmp(argv[i], "--deterministic") )
-		{
-			pbc_random_set_deterministic(0);
-		}
-/* 		else if( !strcmp(argv[i], "-s") || !strcmp(argv[i], "--no-opt-sat") ) */
-/* 		{ */
-/* 			no_opt_sat = 1; */
-/* 		} */
-/* 		else if( !strcmp(argv[i], "-n") || !strcmp(argv[i], "--naive-dec") ) */
-/* 		{ */
-/* 			dec_strategy = DEC_NAIVE; */
-/* 		} */
-/* 		else if( !strcmp(argv[i], "-f") || !strcmp(argv[i], "--flatten") ) */
-/* 		{ */
-/* 			dec_strategy = DEC_FLATTEN; */
-/* 		} */
-/* 		else if( !strcmp(argv[i], "-r") || !strcmp(argv[i], "--report-ops") ) */
-/* 		{ */
-/* 			report_ops = 1; */
-/* 		} */
-		else if( !pub_file )
-		{
-			pub_file = argv[i];
-		}
-		else if( !prv_file )
-		{
-			prv_file = argv[i];
-		}
-		else if( !in_file )
-		{
-			in_file = argv[i];
-		}
-		else
-			die(usage);
-
-	if( !pub_file || !prv_file || !in_file )
-		die(usage);
-
-	if( !out_file )
-	{
-		if(  strlen(in_file) > 6 &&
-				!strcmp(in_file + strlen(in_file) - 6, ".cpabe") )
-			out_file = g_strndup(in_file, strlen(in_file) - 6);
-		else
-			out_file = strdup(in_file);
-	}
-	
-	if( keep && !strcmp(in_file, out_file) )
-		die("cannot keep input file when decrypting file in place (try -o)\n");
+    if (!pub_file || !prv_file || !in_file) {
+        printf("Error: Missing required arguments.\n");
+        exit(1);
+    }
 }
 
-int
-main( int argc, char** argv )
-{
-	bswabe_pub_t* pub;
-	bswabe_prv_t* prv;
-	int file_len;
-	GByteArray* aes_buf;
-	GByteArray* plt;
-	GByteArray* cph_buf;
-	bswabe_cph_t* cph;
-	element_t m;
+void decrypt_file(char* pub_file, char* prv_file, char* in_file, char* out_file) {
+    // Initialize RELIC
+    if (core_init() != RLC_OK) {
+        core_clean();
+        printf("Error initializing RELIC.\n");
+        exit(1);
+    }
 
-	parse_args(argc, argv);
+    // Read public key
+    FILE* pub_fp = fopen(pub_file, "r");
+    if (!pub_fp) {
+        printf("Error opening public key file.\n");
+        core_clean();
+        exit(1);
+    }
+    g1_t pk;
+    g1_null(pk);
+    g1_new(pk);
+    g1_read(pub_fp, pk);
+    fclose(pub_fp);
 
-	pub = bswabe_pub_unserialize(suck_file(pub_file), 1);
-	prv = bswabe_prv_unserialize(pub, suck_file(prv_file), 1);
+    // Read private key
+    FILE* prv_fp = fopen(prv_file, "r");
+    if (!prv_fp) {
+        printf("Error opening private key file.\n");
+        core_clean();
+        exit(1);
+    }
+    bswabe_prv_t* prv = bswabe_prv_unserialize(prv_fp);
+    fclose(prv_fp);
 
-	read_cpabe_file(in_file, &cph_buf, &file_len, &aes_buf);
+    // Read input file
+    FILE* in_fp = fopen(in_file, "r");
+    if (!in_fp) {
+        printf("Error opening input file.\n");
+        core_clean();
+        exit(1);
+    }
+    fseek(in_fp, 0, SEEK_END);
+    long in_file_size = ftell(in_fp);
+    fseek(in_fp, 0, SEEK_SET);
+    uint8_t* in_data = malloc(in_file_size);
+    fread(in_data, 1, in_file_size, in_fp);
+    fclose(in_fp);
 
-	cph = bswabe_cph_unserialize(pub, cph_buf, 1);
-	if( !bswabe_dec(pub, prv, cph, m) )
-		die("%s", bswabe_error());
-	bswabe_cph_free(cph);
+    // Extract IV, GCM tag, ciphertext, and CP-ABE encrypted AES key from input file
+    uint8_t iv[12];
+    uint8_t tag[16];
+    memcpy(iv, in_data, sizeof(iv));
+    memcpy(tag, in_data + sizeof(iv), sizeof(tag));
+    uint8_t* encrypted_data = in_data + sizeof(iv) + sizeof(tag);
+    long encrypted_data_len = in_file_size - sizeof(iv) - sizeof(tag) - cph_buf->len;
 
-	plt = aes_128_cbc_decrypt(aes_buf, m);
-	g_byte_array_set_size(plt, file_len);
-	g_byte_array_free(aes_buf, 1);
+    // Deserialize CP-ABE encrypted AES key
+    GByteArray* cph_buf = g_byte_array_new();
+    g_byte_array_append(cph_buf, in_data + sizeof(iv) + sizeof(tag) + encrypted_data_len, cph_buf->len);
+    bswabe_cph_t* cph = bswabe_cph_unserialize(cph_buf, 1);
 
-	spit_file(out_file, plt, 1);
+    // Decrypt AES key with CP-ABE
+    element_t m;
+    element_init_GT(m, pk);
+    if (!bswabe_dec(m, cph, prv)) {
+        printf("Error decrypting AES key with CP-ABE.\n");
+        core_clean();
+        exit(1);
+    }
+    uint8_t aes_key[16];
+    element_to_bytes(aes_key, m);
+    element_clear(m);
+    bswabe_cph_free(cph);
+    g_byte_array_free(cph_buf, 1);
 
-	if( !keep )
-		unlink(in_file);
+    // Decrypt data with AES-GCM
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    uint8_t* decrypted_data = malloc(encrypted_data_len);
+    int len, plaintext_len;
 
-	/* report ops if necessary */
-/* 	if( report_ops ) */
-/* 		printf("pairings:        %5d\n" */
-/* 					 "exponentiations: %5d\n" */
-/* 					 "multiplications: %5d\n", num_pairings, num_exps, num_muls); */
+    EVP_DecryptInit_ex(ctx, EVP_aes_128_gcm(), NULL, NULL, NULL);
+    EVP_DecryptInit_ex(ctx, NULL, NULL, aes_key, iv);
+    EVP_DecryptUpdate(ctx, decrypted_data, &len, encrypted_data, encrypted_data_len);
+    plaintext_len = len;
+    EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, 16, tag);
+    if (EVP_DecryptFinal_ex(ctx, decrypted_data + len, &len) <= 0) {
+        printf("Error decrypting data with AES-GCM.\n");
+        core_clean();
+        exit(1);
+    }
+    plaintext_len += len;
+    EVP_CIPHER_CTX_free(ctx);
 
-	return 0;
+    // Write decrypted data to output file
+    FILE* out_fp = fopen(out_file, "w");
+    if (!out_fp) {
+        printf("Error opening output file.\n");
+        core_clean();
+        exit(1);
+    }
+    fwrite(decrypted_data, 1, plaintext_len, out_fp);
+    fclose(out_fp);
+
+    // Clean up
+    free(in_data);
+    free(decrypted_data);
+    g1_free(pk);
+    bswabe_prv_free(prv);
+    core_clean();
+}
+
+int main(int argc, char** argv) {
+    parse_args(argc, argv);
+
+    if (!out_file) {
+        out_file = g_strdup_printf("%s.dec", in_file);
+    }
+
+    decrypt_file(pub_file, prv_file, in_file, out_file);
+
+    if (!keep) {
+        unlink(in_file);
+    }
+
+    return 0;
+	
 }
