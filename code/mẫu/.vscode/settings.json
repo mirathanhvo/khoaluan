@@ -1,0 +1,7 @@
+{
+    "files.associations": {
+        "relic.h": "c",
+        "bswabe.h": "c",
+        "private.h": "c"
+    }
+}
