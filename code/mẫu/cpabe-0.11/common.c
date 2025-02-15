@@ -8,250 +8,189 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#include <glib.h>
 #include <openssl/aes.h>
 #include <openssl/sha.h>
-#include <pbc.h>
+#include <relic/relic.h>
 
 #include "common.h"
 
-void
-init_aes( element_t k, int enc, AES_KEY* key, unsigned char* iv )
-{
-  int key_len;
-  unsigned char* key_buf;
+void init_aes(bn_t k, int enc, AES_KEY* key, unsigned char* iv) {
+    int key_len;
+    unsigned char key_buf[32]; // 256 bits max for AES
 
-  key_len = element_length_in_bytes(k) < 17 ? 17 : element_length_in_bytes(k);
-  key_buf = (unsigned char*) malloc(key_len);
-  element_to_bytes(key_buf, k);
+    key_len = bn_size_bin(k);
+    if (key_len > 32) {
+        key_len = 32;
+    }
+    bn_write_bin(key_buf, key_len, k);
 
-  if( enc )
-    AES_set_encrypt_key(key_buf + 1, 128, key);
-  else
-    AES_set_decrypt_key(key_buf + 1, 128, key);
-  free(key_buf);
+    if (enc) {
+        AES_set_encrypt_key(key_buf, 128, key);
+    } else {
+        AES_set_decrypt_key(key_buf, 128, key);
+    }
 
-  memset(iv, 0, 16);
+    memset(iv, 0, 16);
 }
 
-GByteArray*
-aes_128_cbc_encrypt( GByteArray* pt, element_t k )
-{
-  AES_KEY key;
-  unsigned char iv[16];
-  GByteArray* ct;
-  guint8 len[4];
-  guint8 zero;
+uint8_t* aes_128_cbc_encrypt(uint8_t* pt, size_t pt_len, bn_t k, size_t* ct_len) {
+    AES_KEY enc_key;
+    unsigned char iv[16];
+    init_aes(k, 1, &enc_key, iv);
 
-  init_aes(k, 1, &key, iv);
+    *ct_len = ((pt_len + AES_BLOCK_SIZE) / AES_BLOCK_SIZE) * AES_BLOCK_SIZE;
+    uint8_t* ct = (uint8_t*)malloc(*ct_len);
 
-  /* TODO make less crufty */
-
-  /* stuff in real length (big endian) before padding */
-  len[0] = (pt->len & 0xff000000)>>24;
-  len[1] = (pt->len & 0xff0000)>>16;
-  len[2] = (pt->len & 0xff00)>>8;
-  len[3] = (pt->len & 0xff)>>0;
-  g_byte_array_prepend(pt, len, 4);
-
-  /* pad out to multiple of 128 bit (16 byte) blocks */
-  zero = 0;
-  while( pt->len % 16 )
-    g_byte_array_append(pt, &zero, 1);
-
-  ct = g_byte_array_new();
-  g_byte_array_set_size(ct, pt->len);
-
-  AES_cbc_encrypt(pt->data, ct->data, pt->len, &key, iv, AES_ENCRYPT);
-
-  return ct;
+    AES_cbc_encrypt(pt, ct, pt_len, &enc_key, iv, AES_ENCRYPT);
+    return ct;
 }
 
-GByteArray*
-aes_128_cbc_decrypt( GByteArray* ct, element_t k )
-{
-  AES_KEY key;
-  unsigned char iv[16];
-  GByteArray* pt;
-  unsigned int len;
+uint8_t* aes_128_cbc_decrypt(uint8_t* ct, size_t ct_len, bn_t k, size_t* pt_len) {
+    AES_KEY dec_key;
+    unsigned char iv[16];
+    init_aes(k, 0, &dec_key, iv);
 
-  init_aes(k, 0, &key, iv);
-
-  pt = g_byte_array_new();
-  g_byte_array_set_size(pt, ct->len);
-
-  AES_cbc_encrypt(ct->data, pt->data, ct->len, &key, iv, AES_DECRYPT);
-
-  /* TODO make less crufty */
-  
-  /* get real length */
-  len = 0;
-  len = len
-    | ((pt->data[0])<<24) | ((pt->data[1])<<16)
-    | ((pt->data[2])<<8)  | ((pt->data[3])<<0);
-  g_byte_array_remove_index(pt, 0);
-  g_byte_array_remove_index(pt, 0);
-  g_byte_array_remove_index(pt, 0);
-  g_byte_array_remove_index(pt, 0);
-
-  /* truncate any garbage from the padding */
-  g_byte_array_set_size(pt, len);
-
-  return pt;
+    uint8_t* pt = (uint8_t*)malloc(ct_len);
+    AES_cbc_encrypt(ct, pt, ct_len, &dec_key, iv, AES_DECRYPT);
+    *pt_len = ct_len; // Assuming no padding for simplicity
+    return pt;
 }
 
-FILE*
-fopen_read_or_die( char* file )
-{
-	FILE* f;
-
-	if( !(f = fopen(file, "r")) )
-		die("can't read file: %s\n", file);
-
-	return f;
+FILE* fopen_read_or_die(char* file) {
+    FILE* f = fopen(file, "r");
+    if (!f) {
+        die("can't read file: %s\n", file);
+    }
+    return f;
 }
 
-FILE*
-fopen_write_or_die( char* file )
-{
-	FILE* f;
-
-	if( !(f = fopen(file, "w")) )
-		die("can't write file: %s\n", file);
-
-	return f;
+FILE* fopen_write_or_die(char* file) {
+    FILE* f = fopen(file, "w");
+    if (!f) {
+        die("can't write file: %s\n", file);
+    }
+    return f;
 }
 
-GByteArray*
-suck_file( char* file )
-{
-	FILE* f;
-	GByteArray* a;
-	struct stat s;
-
-	a = g_byte_array_new();
-	stat(file, &s);
-	g_byte_array_set_size(a, s.st_size);
-
-	f = fopen_read_or_die(file);
-	fread(a->data, 1, s.st_size, f);
-	fclose(f);
-
-	return a;
+uint8_t* suck_file(char* file, size_t* len) {
+    FILE* f = fopen(file, "rb");
+    if (!f) {
+        die("can't read file: %s\n", file);
+    }
+    fseek(f, 0, SEEK_END);
+    *len = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    uint8_t* data = (uint8_t*)malloc(*len);
+    if (fread(data, 1, *len, f) != *len) {
+        die("error reading file: %s\n", file);
+    }
+    fclose(f);
+    return data;
 }
 
-char*
-suck_file_str( char* file )
-{
-	GByteArray* a;
-	char* s;
-	unsigned char zero;
-
-	a = suck_file(file);
-	zero = 0;
-	g_byte_array_append(a, &zero, 1);
-	s = (char*) a->data;
-	g_byte_array_free(a, 0);
-
-	return s;
+char* suck_file_str(char* file) {
+    size_t len;
+    uint8_t* data = suck_file(file, &len);
+    char* str = (char*)malloc(len + 1);
+    memcpy(str, data, len);
+    str[len] = '\0';
+    free(data);
+    return str;
 }
 
-char*
-suck_stdin()
-{
-	GString* s;
-	char* r;
-	int c;
+char* suck_stdin() {
+    size_t size = 1024;
+    char* buffer = (char*)malloc(size);
+    size_t len = 0;
+    int c;
 
-	s = g_string_new("");
-	while( (c = fgetc(stdin)) != EOF )
-		g_string_append_c(s, c);
-
-	r = s->str;
-	g_string_free(s, 0);
-
-	return r;
+    while ((c = fgetc(stdin)) != EOF) {
+        if (len + 1 >= size) {
+            size *= 2;
+            buffer = (char*)realloc(buffer, size);
+        }
+        buffer[len++] = (char)c;
+    }
+    buffer[len] = '\0';
+    return buffer;
 }
 
-void
-spit_file( char* file, GByteArray* b, int free )
-{
-	FILE* f;
-
-	f = fopen_write_or_die(file);
-	fwrite(b->data, 1, b->len, f);
-	fclose(f);
-
-	if( free )
-		g_byte_array_free(b, 1);
+void spit_file(char* file, uint8_t* data, size_t len, int free_mem) {
+    FILE* f = fopen(file, "wb");
+    if (!f) {
+        die("can't write file: %s\n", file);
+    }
+    if (fwrite(data, 1, len, f) != len) {
+        die("error writing file: %s\n", file);
+    }
+    fclose(f);
+    if (free_mem) {
+        free(data);
+    }
 }
 
-void read_cpabe_file( char* file,    GByteArray** cph_buf,
-											int* file_len, GByteArray** aes_buf )
-{
-	FILE* f;
-	int i;
-	int len;
+void read_cpabe_file(char* file, uint8_t** cph_buf, int* file_len, uint8_t** aes_buf) {
+    FILE* f = fopen(file, "rb");
+    if (!f) {
+        die("can't read file: %s\n", file);
+    }
 
-	*cph_buf = g_byte_array_new();
-	*aes_buf = g_byte_array_new();
+    if (fread(file_len, sizeof(int), 1, f) != 1) {
+        die("error reading file length: %s\n", file);
+    }
+    int aes_len;
+    if (fread(&aes_len, sizeof(int), 1, f) != 1) {
+        die("error reading AES length: %s\n", file);
+    }
+    *aes_buf = (uint8_t*)malloc(aes_len);
+    if (fread(*aes_buf, 1, aes_len, f) != aes_len) {
+        die("error reading AES buffer: %s\n", file);
+    }
 
-	f = fopen_read_or_die(file);
+    int cph_len;
+    if (fread(&cph_len, sizeof(int), 1, f) != 1) {
+        die("error reading ciphertext length: %s\n", file);
+    }
+    *cph_buf = (uint8_t*)malloc(cph_len);
+    if (fread(*cph_buf, 1, cph_len, f) != cph_len) {
+        die("error reading ciphertext buffer: %s\n", file);
+    }
 
-	/* read real file len as 32-bit big endian int */
-	*file_len = 0;
-	for( i = 3; i >= 0; i-- )
-		*file_len |= fgetc(f)<<(i*8);
-
-	/* read aes buf */
-	len = 0;
-	for( i = 3; i >= 0; i-- )
-		len |= fgetc(f)<<(i*8);
-	g_byte_array_set_size(*aes_buf, len);
-	fread((*aes_buf)->data, 1, len, f);
-
-	/* read cph buf */
-	len = 0;
-	for( i = 3; i >= 0; i-- )
-		len |= fgetc(f)<<(i*8);
-	g_byte_array_set_size(*cph_buf, len);
-	fread((*cph_buf)->data, 1, len, f);
-	
-	fclose(f);
+    fclose(f);
 }
 
-void
-write_cpabe_file( char* file,   GByteArray* cph_buf,
-									int file_len, GByteArray* aes_buf )
-{
-	FILE* f;
-	int i;
+void write_cpabe_file(char* file, uint8_t* cph_buf, int file_len, uint8_t* aes_buf) {
+    FILE* f = fopen(file, "wb");
+    if (!f) {
+        die("can't write file: %s\n", file);
+    }
 
-	f = fopen_write_or_die(file);
+    if (fwrite(&file_len, sizeof(int), 1, f) != 1) {
+        die("error writing file length: %s\n", file);
+    }
+    int aes_len = file_len; // Use file_len instead of strlen
+    if (fwrite(&aes_len, sizeof(int), 1, f) != 1) {
+        die("error writing AES length: %s\n", file);
+    }
+    if (fwrite(aes_buf, 1, aes_len, f) != aes_len) {
+        die("error writing AES buffer: %s\n", file);
+    }
 
-	/* write real file len as 32-bit big endian int */
-	for( i = 3; i >= 0; i-- )
-		fputc((file_len & 0xff<<(i*8))>>(i*8), f);
+    int cph_len = file_len; // Use file_len instead of strlen
+    if (fwrite(&cph_len, sizeof(int), 1, f) != 1) {
+        die("error writing ciphertext length: %s\n", file);
+    }
+    if (fwrite(cph_buf, 1, cph_len, f) != cph_len) {
+        die("error writing ciphertext buffer: %s\n", file);
+    }
 
-	/* write aes_buf */
-	for( i = 3; i >= 0; i-- )
-		fputc((aes_buf->len & 0xff<<(i*8))>>(i*8), f);
-	fwrite(aes_buf->data, 1, aes_buf->len, f);
-
-	/* write cph_buf */
-	for( i = 3; i >= 0; i-- )
-		fputc((cph_buf->len & 0xff<<(i*8))>>(i*8), f);
-	fwrite(cph_buf->data, 1, cph_buf->len, f);
-
-	fclose(f);
+    fclose(f);
 }
 
-void
-die(char* fmt, ...)
-{
-	va_list args;
-	va_start(args, fmt);
-	vfprintf(stderr, fmt, args);
-	va_end(args);
-	exit(1);
+void die(const char* fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    vfprintf(stderr, fmt, args);
+    va_end(args);
+    exit(1);
 }

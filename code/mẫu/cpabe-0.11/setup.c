@@ -2,7 +2,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <glib.h>
 #include <relic.h>
 #include <relic_test.h>
 
@@ -30,6 +29,7 @@ char* usage =
 
 char* pub_file = "pub_key";
 char* msk_file = "master_key";
+int deterministic = 0;
 
 void parse_args(int argc, char** argv) {
     int i;
@@ -56,7 +56,7 @@ void parse_args(int argc, char** argv) {
                 exit(1);
             }
         } else if (!strcmp(argv[i], "-d") || !strcmp(argv[i], "--deterministic")) {
-            core_set_rand_method(RAND_SEED);
+            deterministic = 1;
         } else {
             fprintf(stderr, "Error: unknown option %s\n", argv[i]);
             exit(1);
@@ -73,58 +73,78 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // Initialize pairing parameters for BLS12-381 curve
+    if (deterministic) {
+        uint8_t seed[20] = "deterministic_seed";
+        rand_seed(seed, 20);
+    }
+
+    rand_init();
+
     if (ep_param_set_any_pairf() != RLC_OK) {
         printf("Error setting pairing parameters.\n");
         core_clean();
         return 1;
     }
 
-    // Generate master secret key and public key
-    bn_t msk;
-    g1_t g1, pk;
-    g2_t g2;
+    bn_t msk, order;
+    ep_t g1, pk;
+    ep2_t g2;
 
     bn_null(msk);
-    g1_null(g1);
-    g1_null(pk);
-    g2_null(g2);
+    bn_null(order);
+    ep_null(g1);
+    ep_null(pk);
+    ep2_null(g2);
 
     bn_new(msk);
-    g1_new(g1);
-    g1_new(pk);
-    g2_new(g2);
+    bn_new(order);
+    ep_new(g1);
+    ep_new(pk);
+    ep2_new(g2);
 
-    g1_get_gen(g1);
-    g2_get_gen(g2);
-    bn_rand_mod(msk, g1_get_ord());
-    g1_mul_gen(pk, msk);
+    ep_curve_get_gen(g1);
+    ep2_curve_get_gen(g2);
+    ep_curve_get_ord(order);
 
-    // Save public key
-    FILE* pub_fp = fopen(pub_file, "w");
+    if (deterministic) {
+        bn_set_dig(msk, 12345);  // Use fixed number for debugging
+    } else {
+        bn_rand_mod(msk, order);  // Generate secure random key
+    }
+
+    ep_mul_gen(pk, msk);
+
+    FILE* pub_fp = fopen(pub_file, "wb");
     if (!pub_fp) {
         printf("Error opening public key file.\n");
         core_clean();
         return 1;
     }
-    g1_write(pub_fp, pk);
+    uint8_t buffer[RLC_BN_SIZE];
+    int len = ep_size_bin(pk, 1);
+    fwrite(&len, sizeof(int), 1, pub_fp);  // Save length first
+    ep_write_bin(buffer, len, pk, 1);
+    fwrite(buffer, sizeof(uint8_t), len, pub_fp);
     fclose(pub_fp);
 
-    // Save master secret key
-    FILE* msk_fp = fopen(msk_file, "w");
+    FILE* msk_fp = fopen(msk_file, "wb");
     if (!msk_fp) {
         printf("Error opening master secret key file.\n");
         core_clean();
         return 1;
     }
-    bn_write(msk_fp, msk);
+    uint8_t bn_buffer[RLC_BN_SIZE];
+    int bn_len = bn_size_bin(msk);
+    fwrite(&bn_len, sizeof(int), 1, msk_fp);  // Save length first
+    bn_write_bin(bn_buffer, bn_len, msk);
+    fwrite(bn_buffer, sizeof(uint8_t), bn_len, msk_fp);
     fclose(msk_fp);
 
-    // Clean up
     bn_free(msk);
-    g1_free(g1);
-    g1_free(pk);
-    g2_free(g2);
+    bn_free(order);
+    ep_free(g1);
+    ep_free(pk);
+    ep2_free(g2);
 
     core_clean();
     return 0;

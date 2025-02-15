@@ -92,32 +92,47 @@ void decrypt_file(char* pub_file, char* prv_file, char* in_file, char* out_file)
     }
 
     // Read public key
-    FILE* pub_fp = fopen(pub_file, "r");
+    FILE* pub_fp = fopen(pub_file, "rb");
     if (!pub_fp) {
         printf("Error opening public key file.\n");
         core_clean();
         exit(1);
     }
-    g1_t pk;
-    g1_null(pk);
-    g1_new(pk);
-    g1_read(pub_fp, pk);
-    fclose(pub_fp);
-
-    // Read private key
-    FILE* prv_fp = fopen(prv_file, "r");
-    if (!prv_fp) {
-        printf("Error opening private key file.\n");
+    ep_t pk;
+    ep_null(pk);
+    if (ep_new(pk) != RLC_OK) {
+        printf("Error allocating memory for public key.\n");
         core_clean();
         exit(1);
     }
-    bswabe_prv_t* prv = bswabe_prv_unserialize(prv_fp);
+    uint8_t pk_buffer[RLC_EP_SIZE];
+    fread(pk_buffer, sizeof(uint8_t), RLC_EP_SIZE, pub_fp);
+    ep_read_bin(pk, pk_buffer, RLC_EP_SIZE);
+    fclose(pub_fp);
+
+    // Read private key
+    FILE* prv_fp = fopen(prv_file, "rb");
+    if (!prv_fp) {
+        printf("Error opening private key file.\n");
+        ep_free(pk);
+        core_clean();
+        exit(1);
+    }
+    GByteArray* prv_buf = g_byte_array_new();
+    fseek(prv_fp, 0, SEEK_END);
+    long prv_file_size = ftell(prv_fp);
+    fseek(prv_fp, 0, SEEK_SET);
+    g_byte_array_set_size(prv_buf, prv_file_size);
+    fread(prv_buf->data, 1, prv_file_size, prv_fp);
     fclose(prv_fp);
+    bswabe_prv_t* prv = bswabe_prv_unserialize(pub, prv_buf, 1);
 
     // Read input file
-    FILE* in_fp = fopen(in_file, "r");
+    FILE* in_fp = fopen(in_file, "rb");
     if (!in_fp) {
         printf("Error opening input file.\n");
+        ep_free(pk);
+        bswabe_prv_free(prv);
         core_clean();
         exit(1);
     }
@@ -134,24 +149,27 @@ void decrypt_file(char* pub_file, char* prv_file, char* in_file, char* out_file)
     memcpy(iv, in_data, sizeof(iv));
     memcpy(tag, in_data + sizeof(iv), sizeof(tag));
     uint8_t* encrypted_data = in_data + sizeof(iv) + sizeof(tag);
-    long encrypted_data_len = in_file_size - sizeof(iv) - sizeof(tag) - cph_buf->len;
+    long encrypted_data_len = in_file_size - sizeof(iv) - sizeof(tag);
 
     // Deserialize CP-ABE encrypted AES key
     GByteArray* cph_buf = g_byte_array_new();
-    g_byte_array_append(cph_buf, in_data + sizeof(iv) + sizeof(tag) + encrypted_data_len, cph_buf->len);
-    bswabe_cph_t* cph = bswabe_cph_unserialize(cph_buf, 1);
+    g_byte_array_append(cph_buf, in_data + sizeof(iv) + sizeof(tag) + encrypted_data_len, in_file_size - sizeof(iv) - sizeof(tag) - encrypted_data_len);
+    bswabe_cph_t* cph = bswabe_cph_unserialize(pub, cph_buf, 1);
 
     // Decrypt AES key with CP-ABE
-    element_t m;
-    element_init_GT(m, pk);
+    gt_t m;
+    gt_new(m);
     if (!bswabe_dec(m, cph, prv)) {
         printf("Error decrypting AES key with CP-ABE.\n");
+        ep_free(pk);
+        bswabe_prv_free(prv);
+        g_byte_array_free(cph_buf, 1);
         core_clean();
         exit(1);
     }
     uint8_t aes_key[16];
-    element_to_bytes(aes_key, m);
-    element_clear(m);
+    gt_write_bin(aes_key, 16, m);
+    gt_free(m);
     bswabe_cph_free(cph);
     g_byte_array_free(cph_buf, 1);
 
@@ -166,7 +184,12 @@ void decrypt_file(char* pub_file, char* prv_file, char* in_file, char* out_file)
     plaintext_len = len;
     EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, 16, tag);
     if (EVP_DecryptFinal_ex(ctx, decrypted_data + len, &len) <= 0) {
-        printf("Error decrypting data with AES-GCM.\n");
+        printf("AES-GCM authentication failed! Possible incorrect key.\n");
+        EVP_CIPHER_CTX_free(ctx);
+        free(in_data);
+        free(decrypted_data);
+        ep_free(pk);
+        bswabe_prv_free(prv);
         core_clean();
         exit(1);
     }
@@ -174,9 +197,13 @@ void decrypt_file(char* pub_file, char* prv_file, char* in_file, char* out_file)
     EVP_CIPHER_CTX_free(ctx);
 
     // Write decrypted data to output file
-    FILE* out_fp = fopen(out_file, "w");
+    FILE* out_fp = fopen(out_file, "wb");
     if (!out_fp) {
         printf("Error opening output file.\n");
+        free(in_data);
+        free(decrypted_data);
+        ep_free(pk);
+        bswabe_prv_free(prv);
         core_clean();
         exit(1);
     }
@@ -186,7 +213,7 @@ void decrypt_file(char* pub_file, char* prv_file, char* in_file, char* out_file)
     // Clean up
     free(in_data);
     free(decrypted_data);
-    g1_free(pk);
+    ep_free(pk);
     bswabe_prv_free(prv);
     core_clean();
 }
@@ -205,5 +232,4 @@ int main(int argc, char** argv) {
     }
 
     return 0;
-	
 }

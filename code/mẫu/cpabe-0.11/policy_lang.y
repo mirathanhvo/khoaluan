@@ -4,24 +4,25 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <inttypes.h> // Thêm thư viện này để sử dụng PRIu64
 #include <glib.h>
-#include <pbc.h>
+#include <relic.h>  // Thay thế pbc.h bằng relic.h
 
 #include "common.h"
 #include "policy_lang.h"
 
 typedef struct
 {
-	uint64_t value;
-	int bits; /* zero if this is a flexint */
+    uint64_t value;
+    int bits; /* zero if this is a flexint */
 }
 sized_integer_t;
 
 typedef struct
 {
-	int k;               /* one if leaf, otherwise threshold */
-	char* attr;          /* attribute string if leaf, otherwise null */
-	GPtrArray* children; /* pointers to bswabe_policy_t's, len == 0 for leaves */
+    int k;               /* one if leaf, otherwise threshold */
+    char* attr;          /* attribute string if leaf, otherwise null */
+    GPtrArray* children; /* pointers to bswabe_policy_t's, len == 0 for leaves */
 }
 cpabe_policy_t;
 
@@ -43,11 +44,11 @@ cpabe_policy_t* ge_policy( sized_integer_t* n, char* attr );
 
 %union
 {
-	char* str;
-	uint64_t nat;
-  sized_integer_t* sint;
-	cpabe_policy_t* tree;
-	GPtrArray* list;
+    char* str;
+    uint64_t nat;
+    sized_integer_t* sint;
+    cpabe_policy_t* tree;
+    GPtrArray* list;
 }
 
 %token <str>  TAG
@@ -64,10 +65,10 @@ cpabe_policy_t* ge_policy( sized_integer_t* n, char* attr );
 
 %%
 
-result: policy { final_policy = $1 }
+result: policy { final_policy = $1; };
 
 number:   INTLIT '#' INTLIT          { $$ = expint($1, $3); }
-        | INTLIT                     { $$ = flexint($1);    }
+        | INTLIT                     { $$ = flexint($1);    };
 
 policy:   TAG                        { $$ = leaf_policy($1);        }
         | policy OR  policy          { $$ = kof2_policy(1, $1, $3); }
@@ -83,138 +84,136 @@ policy:   TAG                        { $$ = leaf_policy($1);        }
         | number '>' TAG             { $$ = lt_policy($1, $3);      }
         | number LEQ TAG             { $$ = ge_policy($1, $3);      }
         | number GEQ TAG             { $$ = le_policy($1, $3);      }
-        | '(' policy ')'             { $$ = $2;                     }
+        | '(' policy ')'             { $$ = $2;                     };
 
 arg_list: policy                     { $$ = g_ptr_array_new();
                                        g_ptr_array_add($$, $1); }
         | arg_list ',' policy        { $$ = $1;
-                                       g_ptr_array_add($$, $3); }
-;
-
+                                       g_ptr_array_add($$, $3); };
 %%
 
 sized_integer_t*
 expint( uint64_t value, uint64_t bits )
 {
-	sized_integer_t* s;
+    sized_integer_t* s;
 
-	if( bits == 0 )
-		die("error parsing policy: zero-length integer \"%llub%llu\"\n",
-				value, bits);
-	else if( bits > 64 )
-		die("error parsing policy: no more than 64 bits allowed \"%llub%llu\"\n",
-				value, bits);
+    if( bits == 0 )
+        die("error parsing policy: zero-length integer \"%" PRIu64 "b%" PRIu64 "\"\n",
+                value, bits);
+    else if( bits > 64 )
+        die("error parsing policy: no more than 64 bits allowed \"%" PRIu64 "b%" PRIu64 "\"\n",
+                value, bits);
 
-	s = malloc(sizeof(sized_integer_t));
-	s->value = value;
-	s->bits = bits;
+    s = malloc(sizeof(sized_integer_t));
+    s->value = value;
+    s->bits = bits;
 
-	return s;
+    return s;
 }
 
 sized_integer_t*
 flexint( uint64_t value )
 {
-	sized_integer_t* s;
+    sized_integer_t* s;
 
-	s = malloc(sizeof(sized_integer_t));
-	s->value = value;
-	s->bits = 0;
+    s = malloc(sizeof(sized_integer_t));
+    s->value = value;
+    s->bits = 0;
 
-	return s;
+    return s;
 }
 
 void
 policy_free( cpabe_policy_t* p )
 {
-	int i;
+    int i;
 
-	if( p->attr )
-		free(p->attr);
+    if( p->attr )
+        free(p->attr);
 
-	for( i = 0; i < p->children->len; i++ )
-		policy_free(g_ptr_array_index(p->children, i));
-	g_ptr_array_free(p->children, 1);
+    for( i = 0; i < p->children->len; i++ )
+        policy_free(g_ptr_array_index(p->children, i));
+    g_ptr_array_free(p->children, 1);
 
-	free(p);
+    free(p);
 }
 
 cpabe_policy_t*
 leaf_policy( char* attr )
 {
-	cpabe_policy_t* p;
+    cpabe_policy_t* p;
 
-	p = (cpabe_policy_t*) malloc(sizeof(cpabe_policy_t));
-	p->k = 1;
-	p->attr = attr;
-	p->children = g_ptr_array_new();
+    p = (cpabe_policy_t*) malloc(sizeof(cpabe_policy_t));
+    p->k = 1;
+    p->attr = attr;
+    p->children = g_ptr_array_new();
 
-	return p;
+    return p;
 }
 
 cpabe_policy_t*
 kof2_policy( int k, cpabe_policy_t* l, cpabe_policy_t* r )
 {
-	cpabe_policy_t* p;
+    cpabe_policy_t* p;
 
-	p = (cpabe_policy_t*) malloc(sizeof(cpabe_policy_t));
-	p->k = k;
-	p->attr = 0;
-	p->children = g_ptr_array_new();
-	g_ptr_array_add(p->children, l);
-	g_ptr_array_add(p->children, r);
+    p = (cpabe_policy_t*) malloc(sizeof(cpabe_policy_t));
+    p->k = k;
+    p->attr = 0;
+    p->children = g_ptr_array_new();
+    g_ptr_array_add(p->children, l);
+    g_ptr_array_add(p->children, r);
 
-	return p;
+    return p;
 }
 
 cpabe_policy_t*
 kof_policy( int k, GPtrArray* list )
 {
-	cpabe_policy_t* p;
+    cpabe_policy_t* p;
 
-	if( k < 1 )
-		die("error parsing policy: trivially satisfied operator \"%dof\"\n", k);
-	else if( k > list->len )
-		die("error parsing policy: unsatisfiable operator \"%dof\" (only %d operands)\n",
-				k, list->len);
-	else if( list->len == 1 )
-		die("error parsing policy: identity operator \"%dof\" (only one operand)\n", k);
+    if( k < 1 )
+        die("error parsing policy: trivially satisfied operator \"%dof\"\n", k);
+    else if( k > list->len )
+        die("error parsing policy: unsatisfiable operator \"%dof\" (only %d operands)\n",
+                k, list->len);
+    else if( list->len == 1 )
+        die("error parsing policy: identity operator \"%dof\" (only one operand)\n", k);
 
-	p = (cpabe_policy_t*) malloc(sizeof(cpabe_policy_t));
-	p->k = k;
-	p->attr = 0;
-	p->children = list;
+    p = (cpabe_policy_t*) malloc(sizeof(cpabe_policy_t));
+    p->k = k;
+    p->attr = 0;
+    p->children = list;
 
-	return p;
+    return p;
 }
 
 char*
 bit_marker( char* base, char* tplate, int bit, char val )
 {
-	char* lx;
-	char* rx;
-	char* s;
+    char* lx;
+    char* rx;
+    char* s;
 
- 	lx = g_strnfill(64 - bit - 1, 'x');
-	rx = g_strnfill(bit, 'x');
-	s = g_strdup_printf(tplate, base, lx, !!val, rx);
-	free(lx);
-	free(rx);
+    lx = g_strnfill(64 - bit - 1, 'x');
+    rx = g_strnfill(bit, 'x');
+    s = g_strdup_printf(tplate, base, lx, !!val, rx);
+    free(lx);
+    free(rx);
 
-	return s;
+    return s;
 }
 
 cpabe_policy_t*
 eq_policy( sized_integer_t* n, char* attr )
 {
-	if( n->bits == 0 )
-		return leaf_policy
-			(g_strdup_printf("%s_flexint_%llu", attr, n->value));
-	else
-		return leaf_policy
-			(g_strdup_printf("%s_expint%02d_%llu", attr, n->bits, n->value));
+    if( n->bits == 0 )
+        return leaf_policy
+            (g_strdup_printf("%s_flexint_%" PRIu64, attr, n->value));
+    else
+        return leaf_policy
+            (g_strdup_printf("%s_expint%02d_%" PRIu64, attr, n->bits, n->value));
 
-	return 0;
+    return 0;
 }
 
 cpabe_policy_t*

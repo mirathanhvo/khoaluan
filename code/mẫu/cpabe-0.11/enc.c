@@ -80,28 +80,45 @@ void parse_args(int argc, char** argv) {
 void encrypt_file(char* pub_file, char* in_file, char* out_file, char* policy) {
     // Initialize RELIC
     if (core_init() != RLC_OK) {
-        core_clean();
         printf("Error initializing RELIC.\n");
         exit(1);
     }
 
     // Read public key
-    FILE* pub_fp = fopen(pub_file, "r");
+    FILE* pub_fp = fopen(pub_file, "rb");
     if (!pub_fp) {
         printf("Error opening public key file.\n");
         core_clean();
         exit(1);
     }
-    g1_t pk;
-    g1_null(pk);
-    g1_new(pk);
-    g1_read(pub_fp, pk);
+    fseek(pub_fp, 0, SEEK_END);
+    long pub_len = ftell(pub_fp);
+    fseek(pub_fp, 0, SEEK_SET);
+    uint8_t* pub_data = malloc(pub_len);
+    if (!pub_data) {
+        printf("Error: Memory allocation failed.\n");
+        fclose(pub_fp);
+        core_clean();
+        exit(1);
+    }
+    if (fread(pub_data, 1, pub_len, pub_fp) != pub_len) {
+        printf("Error: Failed to read public key file.\n");
+        free(pub_data);
+        fclose(pub_fp);
+        core_clean();
+        exit(1);
+    }
     fclose(pub_fp);
 
+    GByteArray* pub_buf = g_byte_array_new_take(pub_data, pub_len);
+    bswabe_pub_t* pub = bswabe_pub_unserialize(pub_buf);
+    g_byte_array_free(pub_buf, TRUE);
+
     // Read input file
-    FILE* in_fp = fopen(in_file, "r");
+    FILE* in_fp = fopen(in_file, "rb");
     if (!in_fp) {
         printf("Error opening input file.\n");
+        bswabe_pub_free(pub);
         core_clean();
         exit(1);
     }
@@ -109,18 +126,48 @@ void encrypt_file(char* pub_file, char* in_file, char* out_file, char* policy) {
     long in_file_size = ftell(in_fp);
     fseek(in_fp, 0, SEEK_SET);
     uint8_t* in_data = malloc(in_file_size);
+    if (!in_data) {
+        printf("Error: Memory allocation failed.\n");
+        fclose(in_fp);
+        bswabe_pub_free(pub);
+        core_clean();
+        exit(1);
+    }
     fread(in_data, 1, in_file_size, in_fp);
     fclose(in_fp);
 
     // Generate random AES key
     uint8_t aes_key[16];
-    RAND_bytes(aes_key, sizeof(aes_key));
+    bn_t rand_val, order;
+    bn_null(rand_val);
+    bn_null(order);
+    bn_new(rand_val);
+    bn_new(order);
+    ep_curve_get_ord(order);
+    bn_rand_mod(rand_val, order);
+    bn_write_bin(aes_key, sizeof(aes_key), rand_val);
 
     // Encrypt data with AES-GCM
     EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    if (!ctx) {
+        printf("Error: Failed to initialize AES context.\n");
+        free(in_data);
+        bswabe_pub_free(pub);
+        core_clean();
+        exit(1);
+    }
     uint8_t iv[12];
-    RAND_bytes(iv, sizeof(iv));
+    bn_rand_mod(rand_val, order);
+    bn_write_bin(iv, sizeof(iv), rand_val);
     uint8_t* encrypted_data = malloc(in_file_size + 16); // Allocate extra space for padding
+    if (!encrypted_data) {
+        printf("Error: Memory allocation failed.\n");
+        EVP_CIPHER_CTX_free(ctx);
+        free(in_data);
+        bswabe_pub_free(pub);
+        core_clean();
+        exit(1);
+    }
     int len, ciphertext_len;
 
     EVP_EncryptInit_ex(ctx, EVP_aes_128_gcm(), NULL, NULL, NULL);
@@ -135,18 +182,33 @@ void encrypt_file(char* pub_file, char* in_file, char* out_file, char* policy) {
     EVP_CIPHER_CTX_free(ctx);
 
     // Encrypt AES key with CP-ABE
-    element_t m;
-    element_init_GT(m, pk);
-    element_from_hash(m, aes_key, sizeof(aes_key));
-    bswabe_cph_t* cph = bswabe_enc(pk, m, policy);
+    gt_t m;
+    gt_new(m);
+    pp_map_oatep_k12(m, pub->g, pub->gp);
+    gt_exp(m, m, rand_val);
+    bswabe_cph_t* cph = bswabe_enc(pub, m, policy);
+    if (!cph) {
+        printf("CP-ABE encryption failed: %s\n", bswabe_error());
+        free(in_data);
+        free(encrypted_data);
+        bswabe_pub_free(pub);
+        core_clean();
+        exit(1);
+    }
     GByteArray* cph_buf = bswabe_cph_serialize(cph);
     bswabe_cph_free(cph);
-    element_clear(m);
+    gt_free(m);
+    bn_free(rand_val);
+    bn_free(order);
 
     // Write encrypted data to output file
-    FILE* out_fp = fopen(out_file, "w");
+    FILE* out_fp = fopen(out_file, "wb");
     if (!out_fp) {
         printf("Error opening output file.\n");
+        free(in_data);
+        free(encrypted_data);
+        bswabe_pub_free(pub);
+        g_byte_array_free(cph_buf, TRUE);
         core_clean();
         exit(1);
     }
@@ -159,8 +221,8 @@ void encrypt_file(char* pub_file, char* in_file, char* out_file, char* policy) {
     // Clean up
     free(in_data);
     free(encrypted_data);
-    g1_free(pk);
-    g_byte_array_free(cph_buf, 1);
+    bswabe_pub_free(pub);
+    g_byte_array_free(cph_buf, TRUE);
     core_clean();
 }
 
