@@ -1,5 +1,6 @@
 #include <glib.h>
-#include <pbc.h>
+#include <relic.h>
+
 
 #include "common.h"
 #include "policy_lang.h"

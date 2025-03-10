@@ -9,13 +9,13 @@ CFLAGS  = @CFLAGS@ \
     @GLIB_CFLAGS@ \
     @GMP_CFLAGS@ \
     @RELIC_CFLAGS@ \
-    @BSWABE_CFLAGS@ \
+    -I/usr/local/include \
     @DEFS@
 LDFLAGS = @LDFLAGS@ \
     @GLIB_LIBS@ \
     @GMP_LIBS@ \
     @RELIC_LIBS@ \
-    @BSWABE_LIBS@ \
+    -L/usr/local/lib -lbswabe \
     @LIBS@
 
 DISTNAME = @PACKAGE_TARNAME@-@PACKAGE_VERSION@

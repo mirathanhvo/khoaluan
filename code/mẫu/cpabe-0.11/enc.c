@@ -3,6 +3,9 @@
 #include <glib.h>
 #include <relic.h>
 #include <relic_test.h>
+#include <arpa/inet.h> // để dùng htonl()
+#define OPENSSL_API_COMPAT 0x10100000L
+
 #include <openssl/aes.h>
 #include <openssl/rand.h>
 #include <openssl/evp.h>
@@ -10,6 +13,8 @@
 #include "bswabe.h"
 #include "common.h"
 #include "policy_lang.h"
+
+
 
 char* usage =
 "Usage: cpabe-enc [OPTION ...] PUB_KEY FILE [POLICY]\n"
@@ -28,59 +33,19 @@ char* usage =
 "                          (only for debugging)\n\n"
 "";
 
-char* pub_file = 0;
-char* in_file  = 0;
-char* out_file = 0;
-int   keep     = 0;
-
-char* policy = 0;
-
-void parse_args(int argc, char** argv) {
-    int i;
-
-    for (i = 1; i < argc; i++) {
-        if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
-            printf("%s", usage);
-            exit(0);
-        } else if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--version")) {
-            printf("cpabe-enc version 1.0\n");
-            exit(0);
-        } else if (!strcmp(argv[i], "-k") || !strcmp(argv[i], "--keep-input-file")) {
-            keep = 1;
-        } else if (!strcmp(argv[i], "-o") || !strcmp(argv[i], "--output")) {
-            if (i + 1 < argc) {
-                out_file = argv[++i];
-            } else {
-                printf("Error: Missing output file argument.\n");
-                exit(1);
-            }
-        } else if (argv[i][0] != '-') {
-            if (!pub_file) {
-                pub_file = argv[i];
-            } else if (!in_file) {
-                in_file = argv[i];
-            } else if (!policy) {
-                policy = argv[i];
-            } else {
-                printf("Error: Too many arguments.\n");
-                exit(1);
-            }
-        } else {
-            printf("Error: Unknown option %s.\n", argv[i]);
-            exit(1);
-        }
-    }
-
-    if (!pub_file || !in_file) {
-        printf("Error: Missing required arguments.\n");
-        exit(1);
-    }
-}
+extern char* policy;
 
 void encrypt_file(char* pub_file, char* in_file, char* out_file, char* policy) {
     // Initialize RELIC
     if (core_init() != RLC_OK) {
         printf("Error initializing RELIC.\n");
+        exit(1);
+    }
+
+    // Thiết lập các tham số pairing
+    if (pc_param_set_any() != RLC_OK) {
+        printf("Error setting pairing parameters.\n");
+        core_clean();
         exit(1);
     }
 
@@ -111,8 +76,8 @@ void encrypt_file(char* pub_file, char* in_file, char* out_file, char* policy) {
     fclose(pub_fp);
 
     GByteArray* pub_buf = g_byte_array_new_take(pub_data, pub_len);
-    bswabe_pub_t* pub = bswabe_pub_unserialize(pub_buf);
-    g_byte_array_free(pub_buf, TRUE);
+    bswabe_pub_t* pub = bswabe_pub_unserialize(pub_buf, 0);  // Không giải phóng pub_buf bên trong hàm
+    g_byte_array_free(pub_buf, TRUE);  // Tự giải phóng sau đó
 
     // Read input file
     FILE* in_fp = fopen(in_file, "rb");
@@ -136,16 +101,102 @@ void encrypt_file(char* pub_file, char* in_file, char* out_file, char* policy) {
     fread(in_data, 1, in_file_size, in_fp);
     fclose(in_fp);
 
-    // Generate random AES key
-    uint8_t aes_key[16];
-    bn_t rand_val, order;
-    bn_null(rand_val);
+    // Khai báo và khởi tạo các biến bn_t riêng cho AES key và IV
+    bn_t key_rand, iv_rand, order;
+    bn_null(key_rand);
+    bn_null(iv_rand);
     bn_null(order);
-    bn_new(rand_val);
+    bn_new(key_rand);
+    bn_new(iv_rand);
     bn_new(order);
     ep_curve_get_ord(order);
-    bn_rand_mod(rand_val, order);
-    bn_write_bin(aes_key, sizeof(aes_key), rand_val);
+
+    // Sinh AES key từ key_rand (sinh r)
+    bn_rand_mod(key_rand, order);
+
+    // --- Thay đổi ở đây ---
+    // Thay vì sinh AES key trực tiếp từ key_rand, ta tính m = e(g, gp)^(key_rand)
+    gt_t m;
+    gt_new(m);
+    pc_map(m, pub->g, pub->gp);
+    gt_exp(m, m, key_rand);
+
+    // Debug: In ra giá trị serialized của m trước khi canonical hóa
+    printf("Before gt_norm, serialized m (enc): ");
+    int temp_size = fp12_size_bin(m, 1);
+    uint8_t *temp_buffer = malloc(temp_size);
+    fp12_write_bin(temp_buffer, temp_size, m, 1);
+    for (int i = 0; i < temp_size; i++) {
+        printf("%02x", temp_buffer[i]);
+    }
+    printf("\n");
+    free(temp_buffer);
+
+    gt_norm(m);
+
+    // Chuyển phần tử GT m sang dạng nhị phân với pack = 1
+    int gt_req_size = fp12_size_bin(m, 1);
+    uint8_t *buffer = malloc(gt_req_size);
+    if (!buffer) {
+        printf("Error: Memory allocation failed.\n");
+        free(in_data);
+        bswabe_pub_free(pub);
+        bn_free(key_rand);
+        bn_free(iv_rand);
+        bn_free(order);
+        gt_free(m);
+        core_clean();
+        exit(1);
+    }
+    fp12_write_bin(buffer, gt_req_size, m, 1);
+
+    // Debug: In ra giá trị serialized của m sau khi canonical hóa
+    printf("After gt_norm, serialized m (enc): ");
+    for (int i = 0; i < gt_req_size; i++) {
+        printf("%02x", buffer[i]);
+    }
+    printf("\n");
+
+    // Sinh AES key bằng cách băm buffer (lấy 16 byte đầu)
+    uint8_t aes_key[16];
+    unsigned int digest_len;
+    EVP_Digest(buffer, gt_req_size, aes_key, &digest_len, EVP_sha256(), NULL);
+    
+    // Debug: In ra giá trị AES key hash (enc)
+    printf("AES key (enc): ");
+    for (int i = 0; i < 16; i++) {
+        printf("%02x", aes_key[i]);
+    }
+    printf("\n");
+
+    free(buffer);
+    // --- Kết thúc thay đổi ---
+
+    // Sinh IV từ iv_rand
+    bn_rand_mod(iv_rand, order);
+    int iv_bn_len = bn_size_bin(iv_rand);
+    uint8_t *iv_buf = malloc(iv_bn_len);
+    if (!iv_buf) {
+        printf("Error: Memory allocation failed.\n");
+        free(in_data);
+        bswabe_pub_free(pub);
+        bn_free(key_rand);
+        bn_free(iv_rand);
+        bn_free(order);
+        gt_free(m);
+        core_clean();
+        exit(1);
+    }
+    bn_write_bin(iv_buf, iv_bn_len, iv_rand);
+
+    // Băm iv_buf bằng SHA-256 và lấy 12 byte đầu làm IV
+    uint8_t hash_iv[32];
+    unsigned int hash_len;
+    EVP_Digest(iv_buf, iv_bn_len, hash_iv, &hash_len, EVP_sha256(), NULL);
+    free(iv_buf);
+
+    uint8_t iv[12];
+    memcpy(iv, hash_iv, 12);
 
     // Encrypt data with AES-GCM
     EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
@@ -153,23 +204,27 @@ void encrypt_file(char* pub_file, char* in_file, char* out_file, char* policy) {
         printf("Error: Failed to initialize AES context.\n");
         free(in_data);
         bswabe_pub_free(pub);
+        bn_free(key_rand);
+        bn_free(iv_rand);
+        bn_free(order);
+        gt_free(m);
         core_clean();
         exit(1);
     }
-    uint8_t iv[12];
-    bn_rand_mod(rand_val, order);
-    bn_write_bin(iv, sizeof(iv), rand_val);
     uint8_t* encrypted_data = malloc(in_file_size + 16); // Allocate extra space for padding
     if (!encrypted_data) {
         printf("Error: Memory allocation failed.\n");
         EVP_CIPHER_CTX_free(ctx);
         free(in_data);
         bswabe_pub_free(pub);
+        bn_free(key_rand);
+        bn_free(iv_rand);
+        bn_free(order);
+        gt_free(m);
         core_clean();
         exit(1);
     }
     int len, ciphertext_len;
-
     EVP_EncryptInit_ex(ctx, EVP_aes_128_gcm(), NULL, NULL, NULL);
     EVP_EncryptInit_ex(ctx, NULL, NULL, aes_key, iv);
     EVP_EncryptUpdate(ctx, encrypted_data, &len, in_data, in_file_size);
@@ -181,25 +236,32 @@ void encrypt_file(char* pub_file, char* in_file, char* out_file, char* policy) {
     EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, 16, tag);
     EVP_CIPHER_CTX_free(ctx);
 
-    // Encrypt AES key with CP-ABE
-    gt_t m;
-    gt_new(m);
-    pp_map_oatep_k12(m, pub->g, pub->gp);
-    gt_exp(m, m, rand_val);
+    // CP-ABE mã hóa phần tử m (đảm bảo bên giải mã dùng đúng quy trình để tái tạo m và tính lại aes_key)
     bswabe_cph_t* cph = bswabe_enc(pub, m, policy);
     if (!cph) {
         printf("CP-ABE encryption failed: %s\n", bswabe_error());
         free(in_data);
         free(encrypted_data);
         bswabe_pub_free(pub);
+        bn_free(key_rand);
+        bn_free(iv_rand);
+        bn_free(order);
+        gt_free(m);
         core_clean();
         exit(1);
     }
     GByteArray* cph_buf = bswabe_cph_serialize(cph);
     bswabe_cph_free(cph);
+    // Giải phóng m và các biến liên quan
     gt_free(m);
-    bn_free(rand_val);
+    bn_free(key_rand);
+    bn_free(iv_rand);
     bn_free(order);
+
+    // Debug print cho CP-ABE ciphertext
+    printf("DEBUG (enc): ciphertext_len = %d, CP-ABE ciphertext length = %u\n", ciphertext_len, cph_buf->len);
+    long total_enc = sizeof(iv) + sizeof(tag) + HEADER_SIZE + ciphertext_len + cph_buf->len;
+    printf("DEBUG (enc): expected total file size = %ld\n", total_enc);
 
     // Write encrypted data to output file
     FILE* out_fp = fopen(out_file, "wb");
@@ -212,10 +274,29 @@ void encrypt_file(char* pub_file, char* in_file, char* out_file, char* policy) {
         core_clean();
         exit(1);
     }
-    fwrite(iv, 1, sizeof(iv), out_fp); // Write IV
-    fwrite(tag, 1, sizeof(tag), out_fp); // Write GCM tag
-    fwrite(encrypted_data, 1, ciphertext_len, out_fp); // Write ciphertext
-    fwrite(cph_buf->data, 1, cph_buf->len, out_fp); // Write CP-ABE encrypted AES key
+
+    // Ghi IV (12 byte)
+    fwrite(iv, 1, sizeof(iv), out_fp);
+    // Ghi GCM tag (16 byte)
+    fwrite(tag, 1, sizeof(tag), out_fp);
+
+    // Tạo header: 4 byte cho AES ciphertext length và 4 byte cho CP-ABE ciphertext length
+    uint32_t sym_len = ciphertext_len;          // độ dài AES ciphertext
+    uint32_t abe_len = cph_buf->len;              // độ dài CP-ABE ciphertext
+
+    // Chuyển sang network byte order để nhất quán
+    sym_len = htonl(sym_len);
+    abe_len = htonl(abe_len);
+
+    // Ghi header (8 byte)
+    fwrite(&sym_len, sizeof(uint32_t), 1, out_fp);
+    fwrite(&abe_len, sizeof(uint32_t), 1, out_fp);
+
+    // Ghi phần ciphertext AES
+    fwrite(encrypted_data, 1, ciphertext_len, out_fp);
+    // Ghi CP-ABE ciphertext
+    fwrite(cph_buf->data, 1, cph_buf->len, out_fp);
+
     fclose(out_fp);
 
     // Clean up
@@ -228,7 +309,7 @@ void encrypt_file(char* pub_file, char* in_file, char* out_file, char* policy) {
 
 int main(int argc, char** argv) {
     parse_args(argc, argv);
-
+    
     if (!out_file) {
         out_file = g_strdup_printf("%s.cpabe", in_file);
     }

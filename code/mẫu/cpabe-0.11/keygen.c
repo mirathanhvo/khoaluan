@@ -5,9 +5,12 @@
 #include <relic.h>
 #include <relic_test.h>
 
-#include "bswabe.h"
-#include "common.h"
+// Include các header của bạn
+#include "../libbswabe-0.9/bswabe.h"  // Khai báo bswabe_pub_t, bswabe_msk_t, bswabe_keygen...
+#include "common.h"                  // parse_args, bswabe_error, v.v.
+#include "private.h"                 // private.h nếu cần
 
+// (Nếu bạn muốn in usage, bạn có thể giữ `usage` hoặc xóa nếu không cần)
 char* usage =
 "Usage: cpabe-keygen [OPTION ...] PUB_KEY MASTER_KEY ATTR [ATTR ...]\n"
 "\n"
@@ -37,176 +40,117 @@ char* usage =
 "                          (only for debugging)\n\n"
 "";
 
-char* pub_file = 0;
-char* msk_file = 0;
-char** attrs = 0;
-char* out_file = "priv_key";
-
-int comp_string(const void* a, const void* b) {
-    return strcmp(*(const char**)a, *(const char**)b);
-}
-
-void parse_args(int argc, char** argv) {
-    int i;
-
-    for (i = 1; i < argc; i++) {
-        if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
-            printf("%s", usage);
-            exit(0);
-        } else if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--version")) {
-            printf("cpabe-keygen version 1.0\n");
-            exit(0);
-        } else if (!strcmp(argv[i], "-o") || !strcmp(argv[i], "--output")) {
-            if (i + 1 < argc)
-                out_file = argv[++i];
-            else {
-                fprintf(stderr, "Error: --output requires a file name\n");
-                exit(1);
-            }
-        } else if (!strcmp(argv[i], "-d") || !strcmp(argv[i], "--deterministic")) {
-            rand_state state;
-            rand_init(&state, RLC_RAND);
-            rand_seed(&state, (const uint8_t*)"deterministic_seed", 20);
-        } else if (!pub_file) {
-            pub_file = argv[i];
-        } else if (!msk_file) {
-            msk_file = argv[i];
-        } else {
-            attrs = &argv[i];
-            break;
-        }
-    }
-
-    if (!pub_file || !msk_file || !attrs) {
-        fprintf(stderr, "Error: missing required arguments\n");
-        printf("%s", usage);
-        exit(1);
-    }
-}
-
-void keygen(g2_t sk, g1_t* d_i, bn_t msk, char** attributes, int attr_count) {
-    bn_t alpha, h, denom;
-    bn_null(alpha);
-    bn_null(h);
-    bn_null(denom);
-    bn_new(alpha);
-    bn_new(h);
-    bn_new(denom);
-    
-    g2_null(sk);
-    g2_new(sk);
-    g2_get_gen(sk);
-    
-    // Generate random alpha (master secret key)
-    bn_rand_mod(alpha, msk);
-    g2_mul(sk, sk, alpha);
-    
-    for (int i = 0; i < attr_count; i++) {
-        g1_null(d_i[i]);
-        g1_new(d_i[i]);
-        g1_get_gen(d_i[i]);
-        
-        // Securely hash the attribute
-        uint8_t sha256_digest[32];
-        md_map_sh256(sha256_digest, (uint8_t*)attributes[i], strlen(attributes[i]));
-        bn_read_bin(h, sha256_digest, sizeof(sha256_digest));
-        bn_mod(h, h, msk);  // Convert hash to valid integer in group order
-        
-        // Compute d_i = g1^(1 / (alpha + H(attribute_i)))
-        bn_add(denom, h, msk);
-        bn_mod_inv(denom, denom, msk);  // Modular inverse
-        g1_mul(d_i[i], d_i[i], denom);
-    }
-    
-    bn_free(alpha);
-    bn_free(h);
-    bn_free(denom);
-}
-
 int main(int argc, char** argv) {
+    // 1) Xử lý tham số dòng lệnh
     parse_args(argc, argv);
 
+    // 2) Khởi tạo RELIC
     if (core_init() != RLC_OK) {
         core_clean();
         printf("Error initializing RELIC.\n");
         return 1;
     }
+    if (pc_param_set_any() != RLC_OK) {
+        printf("Error setting pairing parameters.\n");
+        core_clean();
+        return 1;
+    }
 
-    // Read public key
+    // 3) Đọc public key từ file pub_file
     FILE* pub_fp = fopen(pub_file, "rb");
     if (!pub_fp) {
         printf("Error opening public key file.\n");
         core_clean();
         return 1;
     }
-    g1_t pk;
-    g1_null(pk);
-    g1_new(pk);
-    uint8_t pk_buffer[RLC_EP_SIZE];
-    fread(pk_buffer, sizeof(uint8_t), RLC_EP_SIZE, pub_fp);
-    g1_read_bin(pk, pk_buffer, RLC_EP_SIZE);
+    fseek(pub_fp, 0, SEEK_END);
+    long pub_len = ftell(pub_fp);
+    fseek(pub_fp, 0, SEEK_SET);
+    uint8_t* pub_data = malloc(pub_len);
+    if (fread(pub_data, 1, pub_len, pub_fp) != pub_len) {
+        printf("Error reading public key file.\n");
+        free(pub_data);
+        fclose(pub_fp);
+        core_clean();
+        return 1;
+    }
     fclose(pub_fp);
 
-    // Read master secret key
+    GByteArray* pub_buf = g_byte_array_new_take(pub_data, pub_len);
+    bswabe_pub_t* pub = bswabe_pub_unserialize(pub_buf, 1);
+    if (!pub) {
+        printf("Error unserializing public key.\n");
+        core_clean();
+        return 1;
+    }
+
+    // 4) Đọc master key từ file msk_file
     FILE* msk_fp = fopen(msk_file, "rb");
     if (!msk_fp) {
         printf("Error opening master secret key file.\n");
-        g1_free(pk);
+        bswabe_pub_free(pub);
         core_clean();
         return 1;
     }
-    bn_t msk;
-    bn_null(msk);
-    bn_new(msk);
-    uint8_t msk_buffer[RLC_BN_SIZE];
-    fread(msk_buffer, sizeof(uint8_t), RLC_BN_SIZE, msk_fp);
-    bn_read_bin(msk, msk_buffer, RLC_BN_SIZE);
+    fseek(msk_fp, 0, SEEK_END);
+    long msk_len = ftell(msk_fp);
+    fseek(msk_fp, 0, SEEK_SET);
+    uint8_t* msk_data = malloc(msk_len);
+    if (fread(msk_data, 1, msk_len, msk_fp) != msk_len) {
+        printf("Error reading master key file.\n");
+        free(msk_data);
+        fclose(msk_fp);
+        bswabe_pub_free(pub);
+        core_clean();
+        return 1;
+    }
     fclose(msk_fp);
 
-    // Generate attribute keys
-    int attr_count = argc - (attrs - argv);
-
-    g2_t sk;
-    g1_t* d_i = malloc(attr_count * sizeof(g1_t));
-    for (int i = 0; i < attr_count; i++) {
-        g1_null(d_i[i]);
-        g1_new(d_i[i]);
-    }
-    keygen(sk, d_i, msk, attrs, attr_count);
-
-    // Save secret key and attribute keys
-    FILE* out_fp = fopen(out_file, "wb");
-    if (!out_fp) {
-        printf("Error opening private key file.\n");
-        for (int i = 0; i < attr_count; i++) {
-            g1_free(d_i[i]);
-        }
-        free(d_i);
-        g1_free(pk);
-        g2_free(sk);
-        bn_free(msk);
+    // Dùng hàm bswabe_msk_unserialize để đọc master key
+    GByteArray* msk_buf = g_byte_array_new_take(msk_data, msk_len);
+    bswabe_msk_t* msk = bswabe_msk_unserialize(pub, msk_buf, 1);
+    if (!msk) {
+        printf("Error unserializing master key.\n");
+        bswabe_pub_free(pub);
         core_clean();
         return 1;
     }
-    uint8_t sk_buffer[RLC_EP_SIZE];
-    int sk_len = g2_size_bin(sk, 1);
-    g2_write_bin(sk_buffer, sk_len, sk, 1);
-    fwrite(sk_buffer, sizeof(uint8_t), sk_len, out_fp);
-    for (int i = 0; i < attr_count; i++) {
-        uint8_t di_buffer[RLC_EP_SIZE];
-        int di_len = g1_size_bin(d_i[i], 1);
-        g1_write_bin(di_buffer, di_len, d_i[i], 1);
-        fwrite(di_buffer, sizeof(uint8_t), di_len, out_fp);
-        g1_free(d_i[i]);
+
+    // 5) Gọi hàm bswabe_keygen (định nghĩa trong core.c, prototype trong bswabe.h)
+    //    => trả về bswabe_prv_t*
+    bswabe_prv_t* prv = bswabe_keygen(pub, msk, attrs);
+    if (!prv) {
+        printf("Error: bswabe_keygen failed (%s)\n", bswabe_error());
+        bswabe_msk_free(msk);
+        bswabe_pub_free(pub);
+        core_clean();
+        return 1;
     }
+
+    // 6) Serialize private key
+    GByteArray* prv_buf = bswabe_prv_serialize(prv);
+
+    // 7) Ghi ra file out_file
+    FILE* out_fp = fopen(out_file, "wb");
+    if (!out_fp) {
+        printf("Error opening private key output file.\n");
+        g_byte_array_free(prv_buf, TRUE);
+        bswabe_prv_free(prv);
+        bswabe_msk_free(msk);
+        bswabe_pub_free(pub);
+        core_clean();
+        return 1;
+    }
+    fwrite(prv_buf->data, 1, prv_buf->len, out_fp);
     fclose(out_fp);
 
-    // Clean up
-    bn_free(msk);
-    g1_free(pk);
-    g2_free(sk);
-    free(d_i);
+    // 8) Giải phóng bộ nhớ
+    g_byte_array_free(prv_buf, TRUE);
+    bswabe_prv_free(prv);
+    bswabe_msk_free(msk);
+    bswabe_pub_free(pub);
 
+    // 9) Kết thúc
     core_clean();
     return 0;
 }

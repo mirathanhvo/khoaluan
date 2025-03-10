@@ -1,4 +1,5 @@
 dnl Check for GNU MP (at least version 4.0) and set GMP_CFLAGS and
+
 dnl GMP_LIBS appropriately.
 
 AC_DEFUN([GMP_4_0_CHECK],
@@ -87,67 +88,63 @@ LIBS=${BACKUP_LIBS}
 
 ])
 
-dnl Check for libpbc and set PBC_CFLAGS and PBC_LIBS
-dnl appropriately.
+dnl Check for librelic and set RELIC_CFLAGS and RELIC_LIBS appropriately.
 
-AC_DEFUN([PBC_CHECK],
+AC_DEFUN([RELIC_CHECK],
 [
 
-AC_MSG_CHECKING(for the PBC library)
+AC_MSG_CHECKING(for the RELIC library)
 
 AC_ARG_WITH(
-  pbc-include,
+  relic-include,
   AC_HELP_STRING(
-    [--with-pbc-include=DIR],
-    [look for the header pbc.h in DIR rather than the default search path]),
-  [PBC_CFLAGS="-I$withval"], [PBC_CFLAGS="-I/usr/include/pbc -I/usr/local/include/pbc"])
+    [--with-relic-include=DIR],
+    [look for the header relic.h in DIR rather than the default search path]),
+  [RELIC_CFLAGS="-I$withval"], [RELIC_CFLAGS="-I/usr/local/include/relic"])
 
 AC_ARG_WITH(
-  pbc-lib,
+  relic-lib,
   AC_HELP_STRING(
-    [--with-pbc-lib=DIR],
-    [look for libpbc.so in DIR rather than the default search path]),
+    [--with-relic-lib=DIR],
+    [look for librelic.so in DIR rather than the default search path]),
   [
     case $withval in
       /* ) true;;
       *  ) AC_MSG_ERROR([
 
-You must specify an absolute path for --with-pbc-lib.
+You must specify an absolute path for --with-relic-lib.
 ]) ;;
     esac
-    PBC_LIBS="-L$withval -Wl,-rpath $withval -Wl,-rpath /usr/local/lib -lpbc"
-  ], [PBC_LIBS="-Wl,-rpath /usr/local/lib -lpbc"])
+    RELIC_LIBS="-L$withval -Wl,-rpath $withval -Wl,-rpath /usr/local/lib -lrelic"
+  ], [RELIC_LIBS="-Wl,-rpath /usr/local/lib -lrelic"])
 
 BACKUP_CFLAGS=${CFLAGS}
 BACKUP_LIBS=${LIBS}
 
-CFLAGS="${CFLAGS} ${PBC_CFLAGS} ${GMP_CFLAGS}"
-LIBS="${LIBS} ${PBC_LIBS} ${GMP_LIBS}"
+CFLAGS="${CFLAGS} ${RELIC_CFLAGS} ${GMP_CFLAGS}"
+LIBS="${LIBS} ${RELIC_LIBS} ${GMP_LIBS}"
 
 AC_TRY_LINK(
-  [#include <pbc.h>],
-  [pairing_t p; pairing_init_set_buf(p, "", 0);],
+  [#include <relic.h>],
+  [bn_t x; bn_null(x); bn_new(x); bn_free(x);],
   [
     AC_MSG_RESULT(found)
-    AC_SUBST(PBC_CFLAGS)
-    AC_SUBST(PBC_LIBS)
-    AC_DEFINE(HAVE_PBC,1,[Defined if PBC is installed])
+    AC_SUBST(RELIC_CFLAGS)
+    AC_SUBST(RELIC_LIBS)
+    AC_DEFINE(HAVE_RELIC,1,[Defined if RELIC is installed])
   ],
   [
     AC_MSG_RESULT(not found)
     AC_MSG_ERROR([
 
-The PBC library was not found on your system! Please obtain it from
+The RELIC library was not found on your system! Please obtain it from
 
-  http://crypto.stanford.edu/pbc/
+  https://github.com/relic-toolkit/relic
 
-and install it before trying again. If libpbc is already
-installed in a non-standard location, try again with
+and install it before trying again. If librelic is already installed
+in a non-standard location, try again with
 
-  ./configure --with-pbc-include=DIR --with-pbc-lib=DIR
-
-If you already specified those arguments, double check that pbc.h can
-be found in the first path and libpbc.a can be found in the second.
+  ./configure --with-relic-include=DIR --with-relic-lib=DIR
 
 See ./configure --help for more information.
 ])
@@ -158,8 +155,7 @@ LIBS=${BACKUP_LIBS}
 
 ])
 
-dnl Check for libbswabe and set BSWABE_CFLAGS and BSWABE_LIBS
-dnl appropriately.
+dnl Check for libbswabe and set BSWABE_CFLAGS and BSWABE_LIBS appropriately.
 
 AC_DEFUN([BSWABE_CHECK],
 [
@@ -168,39 +164,27 @@ AC_MSG_CHECKING(for libbswabe)
 
 AC_ARG_WITH(
   bswabe-include,
-  AC_HELP_STRING(
-    [--with-bswabe-include=DIR],
-    [look for the header bswabe.h in DIR rather than the default search path]),
-  [BSWABE_CFLAGS="-I$withval"], [BSWABE_CFLAGS=""])
+  AC_HELP_STRING([--with-bswabe-include=DIR], [Path to BSWABE headers]),
+  [BSWABE_CFLAGS="-I$withval"],
+  [BSWABE_CFLAGS="-I/usr/local/include"]
+)
 
 AC_ARG_WITH(
   bswabe-lib,
-  AC_HELP_STRING(
-    [--with-bswabe-lib=DIR],
-    [look for libbswabe.a in DIR rather than the default search path]),
-  [
-    case $withval in
-      /* ) true;;
-      *  ) AC_MSG_ERROR([
-
-You must specify an absolute path for --with-bswabe-lib.
-]) ;;
-    esac
-    BSWABE_LIBS="-L$withval -lbswabe"
-  ], [BSWABE_LIBS="-lbswabe"])
+  AC_HELP_STRING([--with-bswabe-lib=DIR], [Path to BSWABE libraries]),
+  [BSWABE_LIBS="-L$withval -lbswabe"],
+  [BSWABE_LIBS="-L/usr/local/lib -lbswabe"]
+)
 
 BACKUP_CFLAGS=${CFLAGS}
 BACKUP_LIBS=${LIBS}
 
-CFLAGS="${CFLAGS} ${BSWABE_CFLAGS} ${PBC_CFLAGS} ${GMP_CFLAGS} ${GLIB_CFLAGS}"
-LIBS="${LIBS} ${BSWABE_LIBS} ${PBC_LIBS} ${GMP_LIBS} ${GLIB_LIBS}"
+CFLAGS="${CFLAGS} ${BSWABE_CFLAGS}"
+LIBS="${LIBS} ${BSWABE_LIBS}"
 
 AC_TRY_LINK(
-  [#include <glib.h>
-   #include <pbc.h>
-   #include <bswabe.h>],
-  [bswabe_pub_t* p;
-   bswabe_pub_free(p);],
+  [#include <bswabe.h>],
+  [bswabe_pub_t* p = NULL; bswabe_pub_free(p);],
   [
     AC_MSG_RESULT(found)
     AC_SUBST(BSWABE_CFLAGS)
@@ -209,25 +193,9 @@ AC_TRY_LINK(
   ],
   [
     AC_MSG_RESULT(not found)
-    AC_MSG_ERROR([
-
-The library libbswabe was not found on your system! Please obtain it
-from
-
-  http://acsc.csl.sri.com/cpabe/
-
-and install it before trying again. If libbswabe is already
-installed in a non-standard location, try again with
-
-  ./configure --with-bswabe-include=<path> --with-bswabe-lib=<path>
-
-If you already specified those arguments, double check that bswabe.h
-can be found in the first path and libbswabe.a can be found in the
-second.
-
-See ./configure --help for more information.
-])
-  ])
+    AC_MSG_ERROR([libbswabe was not found. Please install it and try again.])
+  ]
+)
 
 CFLAGS=${BACKUP_CFLAGS}
 LIBS=${BACKUP_LIBS}

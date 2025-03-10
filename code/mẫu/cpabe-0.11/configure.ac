@@ -1,6 +1,7 @@
 dnl Process this file with autoconf to produce a configure script.
 AC_PREREQ(2.61)
 AC_INIT([cpabe], [0.11], [bethenco@cs.berkeley.edu])
+AM_INIT_AUTOMAKE
 AC_CONFIG_SRCDIR([common.h])
 
 dnl First, standard system stuff.
@@ -46,8 +47,10 @@ AC_CHECK_FUNCS([strchr strdup memset],,
 dnl Now, we check for specific packages we need.
 AM_PATH_GLIB_2_0([2.0.0])
 GMP_4_0_CHECK
-PBC_CHECK
-BSWABE_CHECK
+PKG_CHECK_MODULES([BSWABE], [libbswabe])
+
+dnl Check for RELIC library
+RELIC_CHECK
 
 dnl Specify the output.
 AC_CONFIG_FILES([Makefile])
