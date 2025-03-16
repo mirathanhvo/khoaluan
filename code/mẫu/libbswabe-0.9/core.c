@@ -14,6 +14,23 @@
 #include "private.h"
 #include "common.h"  // <-- để dùng raise_error(), v.v. nếu cần
 
+// nếu chưa có, thêm prototype
+void hash_attr(g1_t h, char* attr);
+void hash_attr2(g1_t h, char* attr);
+
+// định nghĩa hàm nếu chưa có
+void hash_attr(g1_t h, char* attr) {
+    uint8_t digest[SHA256_DIGEST_LENGTH];
+    SHA256((uint8_t*)attr, strlen(attr), digest);
+    g1_map(h, digest, SHA256_DIGEST_LENGTH);
+}
+
+void hash_attr2(g1_t h, char* attr) {
+    uint8_t digest[SHA256_DIGEST_LENGTH];
+    SHA256((uint8_t*)attr, strlen(attr), digest);
+    g1_map(h, digest, SHA256_DIGEST_LENGTH);
+}
+
 /*
  * bswabe_setup:
  *   - Khởi tạo khóa công khai (pub) và master secret key (msk) sử dụng RELIC.
@@ -108,38 +125,50 @@ bswabe_prv_t* bswabe_keygen(bswabe_pub_t* pub, bswabe_msk_t* msk, char** attribu
         raise_error("Memory allocation failed in g_array_new()");
     }
 
-    while (*attributes) {
+    for (int i = 0; attributes[i]; i++) {
         bswabe_prv_comp_t c;
-        g2_t h_rp, temp2;
-        bn_t rp;
 
-        c.attr = strdup(*(attributes++));
+        // Copy attribute name
+        c.attr = strdup(attributes[i]);
         if (!c.attr) {
             raise_error("Memory allocation failed in strdup()");
         }
 
-        g2_null(h_rp);   g2_new(h_rp);
-        bn_null(rp);     bn_new(rp);
-        g2_null(temp2);  g2_new(temp2);
+        // Sinh ngẫu nhiên r_i
+        bn_t r;
+        bn_null(r);
+        bn_new(r);
+        bn_rand_mod(r, order);
 
-        element_from_string_g2(h_rp, c.attr);
-        bn_rand_mod(rp, order);
+        // Tính toán các thành phần:
+        // d = g^r_i
+        // dp = H(attr)^r_i
+        // z = gp^r_i (optional)
+        // zp = H'(attr)^r_i (optional)
 
-        g2_mul(temp2, h_rp, rp);
+        g1_new(c.dp); g1_new(c.zp); // nếu bạn dùng thêm
+        g2_new(c.d); g2_new(c.z);   // nếu bạn dùng thêm
 
-        g2_null(c.d);
-        g2_new(c.d);
-        g2_add(c.d, g_r, temp2);
+        // dp = H(attr)^r_i
+        g1_t h_attr;
+        g1_null(h_attr); g1_new(h_attr);
+        hash_attr(h_attr, attributes[i]); // giả sử bạn có hàm này
+        g1_mul(c.dp, h_attr, r);
 
-        g1_null(c.dp);
-        g1_new(c.dp);
-        g1_mul(c.dp, pub->h, rp);
+        // d = g^r_i
+        g2_mul_gen(c.d, r); // hoặc ep2_mul(c.d, gp, r);
+
+        // (Tùy chọn) nếu hệ thống bạn có gp, h2:
+        g2_mul(c.z, pub->gp, r);
+        g1_t h_attr2;
+        g1_null(h_attr2); g1_new(h_attr2);
+        hash_attr2(h_attr2, attributes[i]);
+        g1_mul(c.zp, h_attr2, r);
 
         g_array_append_val(prv->comps, c);
 
-        g2_free(h_rp);
-        g2_free(temp2);
-        bn_free(rp);
+        // Dọn r
+        bn_free(r);
     }
 
     bn_free(order);

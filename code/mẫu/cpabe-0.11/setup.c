@@ -64,6 +64,12 @@ int main(int argc, char** argv) {
     bswabe_msk_t* msk = NULL;
     bswabe_setup(&pub, &msk);
 
+    // Debug: kiểm tra nếu msk không tồn tại
+    if (!msk) {
+        fprintf(stderr, "ERROR: bswabe_setup() failed to generate master key.\n");
+        return 1;
+    }
+
     // In ra các phần tử quan trọng của public key
     printf("Public key element g in setup:\n");
     ep_print(pub->g);
@@ -84,9 +90,22 @@ int main(int argc, char** argv) {
 
     // Serialize master key
     GByteArray* msk_data = bswabe_msk_serialize(msk);
+    if (!msk_data) {
+        fprintf(stderr, "ERROR: bswabe_msk_serialize() returned NULL.\n");
+        bswabe_pub_free(pub);
+        bswabe_msk_free(msk);
+        bn_free(order);
+        core_clean();
+        return 1;
+    }
     FILE* msk_fp = fopen(msk_file, "wb");
     if (!msk_fp) {
         fprintf(stderr, "Error opening msk_file.\n");
+        bswabe_pub_free(pub);
+        bswabe_msk_free(msk);
+        g_byte_array_free(msk_data, TRUE);
+        bn_free(order);
+        core_clean();
         return 1;
     }
     fwrite(msk_data->data, 1, msk_data->len, msk_fp);

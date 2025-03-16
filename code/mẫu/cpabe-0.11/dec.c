@@ -163,8 +163,11 @@ void decrypt_file(char* pub_file, char* prv_file, char* in_file, char* out_file)
     gt_t m;
     gt_null(m);
     gt_new(m);
+
     if (!bswabe_dec(pub, prv, cph, m)) {
-        printf("Error decrypting AES key with CP-ABE.\n");
+        fprintf(stderr, "ERROR: CP-ABE decryption failed! Your attributes do not satisfy the policy.\n");
+        gt_free(m);  // tránh memory leak
+        bswabe_cph_free(cph);
         bswabe_pub_free(pub);
         bswabe_prv_free(prv);
         core_clean();
@@ -195,7 +198,7 @@ void decrypt_file(char* pub_file, char* prv_file, char* in_file, char* out_file)
     free(buf_after);
 
     // Tính kích thước và cấp phát buffer cho phần tử m
-    gt_req_size = SAFE_GT_CAPACITY;  // Sử dụng SAFE_GT_CAPACITY đảm bảo buffer đủ lớn
+    gt_req_size = fp12_size_bin(m, 1);
     uint8_t *buffer = malloc(gt_req_size);
     if (!buffer) {
         die("Memory allocation error for GT buffer.\n");

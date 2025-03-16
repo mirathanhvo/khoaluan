@@ -24,12 +24,15 @@ uint32_t unserialize_uint32(GByteArray* b, int* offset) {
 }
 
 void serialize_bn(GByteArray* b, bn_t n) {
-    uint32_t len = bn_size_bin(n);
-    serialize_uint32(b, len);
-    unsigned char* buf = malloc(len);
-    bn_write_bin(buf, len, n);
-    g_byte_array_append(b, buf, len);
-    free(buf);
+    uint32_t len = bn_size_bin(n);  // Lấy kích thước nhị phân của bn
+    serialize_uint32(b, len);  // Serialize chiều dài
+    unsigned char* buf = malloc(len);  // Cấp phát bộ nhớ đủ lớn
+    if (buf == NULL) {
+        die("Memory allocation failed in serialize_bn()");  // Kiểm tra lỗi cấp phát
+    }
+    bn_write_bin(buf, len, n);  // Viết dữ liệu vào buffer
+    g_byte_array_append(b, buf, len);  // Ghi buffer vào GByteArray
+    free(buf);  // Giải phóng bộ nhớ
 }
 
 void unserialize_bn(GByteArray* b, int* offset, bn_t n) {
@@ -46,6 +49,10 @@ void serialize_g1(GByteArray* b, g1_t e) {
     uint32_t len = g1_size_bin(e, 1);
     serialize_uint32(b, len);
     unsigned char* buf = malloc(len);
+    if (!buf) {
+        fprintf(stderr, "ERROR: Memory allocation failed in serialize_g1().\n");
+        exit(1);
+    }
     g1_write_bin(buf, len, e, 1);
     g_byte_array_append(b, buf, len);
     free(buf);
@@ -53,7 +60,15 @@ void serialize_g1(GByteArray* b, g1_t e) {
 
 void unserialize_g1(GByteArray* b, int* offset, g1_t e) {
     uint32_t len = unserialize_uint32(b, offset);
+    if (*offset + len > b->len) {
+        fprintf(stderr, "ERROR: Buffer too small in unserialize_g1().\n");
+        exit(1);
+    }
     unsigned char* buf = malloc(len);
+    if (!buf) {
+        fprintf(stderr, "ERROR: Memory allocation failed in unserialize_g1().\n");
+        exit(1);
+    }
     memcpy(buf, b->data + *offset, len);
     *offset += len;
     g1_read_bin(e, buf, len);
@@ -65,6 +80,10 @@ void serialize_g2(GByteArray* b, g2_t e) {
     uint32_t len = g2_size_bin(e, 1);
     serialize_uint32(b, len);
     unsigned char* buf = malloc(len);
+    if (!buf) {
+        fprintf(stderr, "ERROR: Memory allocation failed in serialize_g2().\n");
+        exit(1);
+    }
     g2_write_bin(buf, len, e, 1);
     g_byte_array_append(b, buf, len);
     free(buf);
@@ -72,7 +91,15 @@ void serialize_g2(GByteArray* b, g2_t e) {
 
 void unserialize_g2(GByteArray* b, int* offset, g2_t e) {
     uint32_t len = unserialize_uint32(b, offset);
+    if (*offset + len > b->len) {
+        fprintf(stderr, "ERROR: Buffer too small in unserialize_g2().\n");
+        exit(1);
+    }
     unsigned char* buf = malloc(len);
+    if (!buf) {
+        fprintf(stderr, "ERROR: Memory allocation failed in unserialize_g2().\n");
+        exit(1);
+    }
     memcpy(buf, b->data + *offset, len);
     *offset += len;
     g2_read_bin(e, buf, len);
@@ -84,6 +111,10 @@ void serialize_gt(GByteArray* b, gt_t e) {
     uint32_t len = gt_size_bin(e, 1);
     serialize_uint32(b, len);
     unsigned char* buf = malloc(len);
+    if (!buf) {
+        fprintf(stderr, "ERROR: Memory allocation failed in serialize_gt().\n");
+        exit(1);
+    }
     gt_write_bin(buf, len, e, 1);
     g_byte_array_append(b, buf, len);
     free(buf);
@@ -91,7 +122,15 @@ void serialize_gt(GByteArray* b, gt_t e) {
 
 void unserialize_gt(GByteArray* b, int* offset, gt_t e) {
     uint32_t len = unserialize_uint32(b, offset);
+    if (*offset + len > b->len) {
+        fprintf(stderr, "ERROR: Buffer too small in unserialize_gt().\n");
+        exit(1);
+    }
     unsigned char* buf = malloc(len);
+    if (!buf) {
+        fprintf(stderr, "ERROR: Memory allocation failed in unserialize_gt().\n");
+        exit(1);
+    }
     memcpy(buf, b->data + *offset, len);
     *offset += len;
     gt_read_bin(e, buf, len);
@@ -103,6 +142,7 @@ bswabe_pub_t* bswabe_pub_unserialize(GByteArray* buf, int free_flag) {
     int offset = 0;
     bswabe_pub_t* pub = malloc(sizeof(bswabe_pub_t));
     if (!pub) {
+        fprintf(stderr, "Error: Failed to unserialize public key.\n");
         return NULL;
     }
 
@@ -125,6 +165,16 @@ bswabe_pub_t* bswabe_pub_unserialize(GByteArray* buf, int free_flag) {
     unserialize_gt(buf, &offset, pub->g_hat_alpha);
     unserialize_g1(buf, &offset, pub->h);
 
+    // Unserialize trường order
+    bn_null(pub->order);
+    bn_new(pub->order);
+    unserialize_bn(buf, &offset, pub->order);
+
+    // In ra kích thước của g và gp
+    printf("g size: %ld\n", g1_size_bin(pub->g, 1));
+    printf("gp size: %ld\n", g2_size_bin(pub->gp, 1));
+    
+
     if (free_flag) {
         g_byte_array_free(buf, TRUE);
     }
@@ -139,23 +189,26 @@ GByteArray* bswabe_pub_serialize(bswabe_pub_t* pub) {
     serialize_g2(buf, pub->gp);
     serialize_gt(buf, pub->g_hat_alpha);
     serialize_g1(buf, pub->h);
+    serialize_bn(buf, pub->order);
+
     return buf;
 }
 
 GByteArray* bswabe_msk_serialize(bswabe_msk_t* msk) {
     GByteArray* b = g_byte_array_new();
+    serialize_g2(b, msk->g_alpha);  
     serialize_bn(b, msk->beta);
-    serialize_g2(b, msk->g_alpha);
     return b;
 }
 
 bswabe_msk_t* bswabe_msk_unserialize(bswabe_pub_t* pub, GByteArray* b, int free) {
     bswabe_msk_t* msk = malloc(sizeof(bswabe_msk_t));
     int offset = 0;
-    bn_new(msk->beta);
     g2_new(msk->g_alpha);
+    unserialize_g2(b, &offset, msk->g_alpha);  
+    bn_null(msk->beta);
+    bn_new(msk->beta);
     unserialize_bn(b, &offset, msk->beta);
-    unserialize_g2(b, &offset, msk->g_alpha);
     if (free) g_byte_array_free(b, 1);
     return msk;
 }
@@ -240,10 +293,10 @@ bswabe_prv_t* bswabe_prv_unserialize(bswabe_pub_t* pub, GByteArray* buf, int fre
         g1_new(comp.dp);
         unserialize_g1(buf, &offset, comp.dp);
 
-        // comp.z (g1)
-        g1_null(comp.z);
-        g1_new(comp.z);
-        unserialize_g1(buf, &offset, comp.z);
+        // comp.z (g2)
+        g2_null(comp.z);
+        g2_new(comp.z);
+        unserialize_g2(buf, &offset, comp.z);
 
         // comp.zp (g1)
         g1_null(comp.zp);
@@ -295,8 +348,8 @@ GByteArray* bswabe_prv_serialize(bswabe_prv_t* prv) {
         // 3.4) Ghi g1 comp->dp
         serialize_g1(b, comp->dp);
 
-        // 3.5) Ghi g1 comp->z
-        serialize_g1(b, comp->z);
+        // 3.5) Ghi g2 comp->z
+        serialize_g2(b, comp->z);
 
         // 3.6) Ghi g1 comp->zp
         serialize_g1(b, comp->zp);

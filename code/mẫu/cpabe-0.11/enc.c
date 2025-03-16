@@ -152,16 +152,18 @@ void encrypt_file(char* pub_file, char* in_file, char* out_file, char* policy) {
     printf("\n");
     free(temp_buffer);
 
-    /* 6. Canonical hóa GT m và tính kích thước serialize mới */
+    /* Canonical hóa GT m */
     gt_norm(m);
-    int gt_req_size = fp12_size_bin(m, 1);
-    printf("gt_req_size after gt_norm = %d\n", gt_req_size);
+    gt_norm(m);  // gọi thêm nếu cần
 
-    /* 7. Cấp phát bộ đệm với dung lượng an toàn: bổ sung thêm 128 byte dự phòng */
-    int safe_size = gt_req_size + 128;  // tăng thêm dự phòng, có thể thử +128 hoặc +256
-    uint8_t *buffer = malloc(safe_size);
+    /* Lấy số byte yêu cầu theo fp12_size_bin */
+    int req = fp12_size_bin(m, 1);
+    printf("fp12_size_bin(m,1) = %d\n", req);
+
+    /* Cấp phát buffer chính xác theo số byte này */
+    uint8_t *buffer = malloc(req);
     if (!buffer) {
-        printf("Error: Memory allocation failed for GT buffer.\n");
+        fprintf(stderr, "Error: Memory allocation failed for GT buffer.\n");
         free(in_data);
         bswabe_pub_free(pub);
         bn_free(key_rand); bn_free(iv_rand); bn_free(order);
@@ -169,24 +171,36 @@ void encrypt_file(char* pub_file, char* in_file, char* out_file, char* policy) {
         core_clean();
         exit(1);
     }
-    /* Ghi phần tử GT đã canonical hóa vào bộ đệm */
-    fp12_write_bin(buffer, safe_size, m, 1);
-    printf("After gt_norm, serialized m (enc): ");
-    for (int i = 0; i < gt_req_size; i++) {
+
+    /* Ghi serialize phần tử GT vào buffer, với dung lượng cấp phát chính xác */
+    fp12_write_bin(buffer, req, m, 1);
+
+    /* Debug: In ra dữ liệu serialize */
+    printf("Serialized m (enc, pack=1): ");
+    for (int i = 0; i < req; i++) {
         printf("%02x", buffer[i]);
     }
     printf("\n");
 
-    /* 8. Sinh AES key bằng cách băm buffer (lấy 16 byte đầu) */
+    /* Sinh AES key từ buffer */
     uint8_t aes_key[16];
     unsigned int digest_len;
-    EVP_Digest(buffer, gt_req_size, aes_key, &digest_len, EVP_sha256(), NULL);
-    printf("AES key (enc): ");
+    if (!EVP_Digest(buffer, req, aes_key, &digest_len, EVP_sha256(), NULL)) {
+        fprintf(stderr, "Error: EVP_Digest failed.\n");
+        free(buffer);
+        free(in_data);
+        bswabe_pub_free(pub);
+        bn_free(key_rand); bn_free(iv_rand); bn_free(order);
+        gt_free(m);
+        core_clean();
+        exit(1);
+    }
+    free(buffer);
+    printf("AES key (enc, pack=1): ");
     for (int i = 0; i < 16; i++) {
         printf("%02x", aes_key[i]);
     }
     printf("\n");
-    free(buffer);
 
     /* 9. Sinh IV từ iv_rand */
     bn_rand_mod(iv_rand, order);
@@ -243,8 +257,8 @@ void encrypt_file(char* pub_file, char* in_file, char* out_file, char* policy) {
 
     /* 11. CP-ABE mã hóa phần tử m theo policy */
     bswabe_cph_t* cph = bswabe_enc(pub, m, policy);
-    if (!cph) {
-        printf("CP-ABE encryption failed: %s\n", bswabe_error());
+    if (!cph || !cph->p) {
+        fprintf(stderr, "ERROR: Failed to build ciphertext policy tree. Check policy syntax!\n");
         free(in_data);
         free(encrypted_data);
         bswabe_pub_free(pub);
@@ -302,8 +316,7 @@ int main(int argc, char** argv) {
         printf("Enter policy: ");
         size_t len = 0;
         getline(&policy, &len, stdin);
-    }
-    
+    } 
     encrypt_file(pub_file, in_file, out_file, policy);
     
     if (!keep) {

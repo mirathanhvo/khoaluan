@@ -249,28 +249,36 @@
  
  /* ======= bswabe_dec: giải mã ciphertext ======= */
  int bswabe_dec(bswabe_pub_t* pub, bswabe_prv_t* prv, bswabe_cph_t* cph, gt_t m) {
-     check_sat(cph->p, prv);
-     if(!cph->p->satisfiable) {
-         fprintf(stderr, "cannot decrypt, attributes in key do not satisfy policy\n");
-         return 0;
-     }
-     pick_sat_min_leaves(cph->p, prv);
- 
-     gt_t F;
-     gt_new(F);
-     dec_node_naive(F, cph->p, prv, pub);
- 
-     gt_mul(m, cph->cs, F);
- 
-     gt_t tmp;
-     gt_new(tmp);
-     pc_map(tmp, cph->c, prv->d);
-     gt_inv(tmp, tmp);
-     gt_mul(m, m, tmp);
- 
-     gt_free(F);
-     gt_free(tmp);
-     return 1;
+    check_sat(cph->p, prv);
+    if (!cph->p) {
+        fprintf(stderr, "ERROR: Ciphertext policy tree is NULL.\n");
+        return 0;
+    }
+    if (!prv) {
+        fprintf(stderr, "ERROR: Private key is NULL.\n");
+        return 0;
+    }
+    if (!cph->p->satisfiable) {
+        fprintf(stderr, "ERROR: Attributes in private key do not satisfy the policy.\n");
+        return 0;
+    }
+    pick_sat_min_leaves(cph->p, prv);
+
+    gt_t F;
+    gt_new(F);
+    dec_node_naive(F, cph->p, prv, pub);
+
+    gt_mul(m, cph->cs, F);
+
+    gt_t tmp;
+    gt_new(tmp);
+    pc_map(tmp, cph->c, prv->d);
+    gt_inv(tmp, tmp);
+    gt_mul(m, m, tmp);
+
+    gt_free(F);
+    gt_free(tmp);
+    return 1;
  }
  
  /* ======= bswabe_enc: mã hóa ======= */
@@ -305,4 +313,3 @@
      bn_free(s);
      return cph;
  }
- 

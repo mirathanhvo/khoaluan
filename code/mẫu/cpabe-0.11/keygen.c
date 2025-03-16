@@ -66,9 +66,15 @@ int main(int argc, char** argv) {
     fseek(pub_fp, 0, SEEK_END);
     long pub_len = ftell(pub_fp);
     fseek(pub_fp, 0, SEEK_SET);
-    uint8_t* pub_data = malloc(pub_len);
+    uint8_t* pub_data = malloc(pub_len + 1024);  // Thêm dung lượng dự phòng
+    if (!pub_data) {
+        printf("Error: Memory allocation failed for public key data.\n");
+        fclose(pub_fp);
+        core_clean();
+        return 1;
+    }
     if (fread(pub_data, 1, pub_len, pub_fp) != pub_len) {
-        printf("Error reading public key file.\n");
+        printf("Error: Failed to read public key file.\n");
         free(pub_data);
         fclose(pub_fp);
         core_clean();
@@ -76,10 +82,13 @@ int main(int argc, char** argv) {
     }
     fclose(pub_fp);
 
+    printf("Public key size: %ld\n", pub_len);  // In ra kích thước của public key
+
     GByteArray* pub_buf = g_byte_array_new_take(pub_data, pub_len);
     bswabe_pub_t* pub = bswabe_pub_unserialize(pub_buf, 1);
     if (!pub) {
         printf("Error unserializing public key.\n");
+        g_byte_array_free(pub_buf, TRUE);
         core_clean();
         return 1;
     }
@@ -95,9 +104,16 @@ int main(int argc, char** argv) {
     fseek(msk_fp, 0, SEEK_END);
     long msk_len = ftell(msk_fp);
     fseek(msk_fp, 0, SEEK_SET);
-    uint8_t* msk_data = malloc(msk_len);
+    uint8_t* msk_data = malloc(msk_len + 1024);  // Thêm dung lượng dự phòng
+    if (!msk_data) {
+        printf("Error: Memory allocation failed for master key data.\n");
+        fclose(msk_fp);
+        bswabe_pub_free(pub);
+        core_clean();
+        return 1;
+    }
     if (fread(msk_data, 1, msk_len, msk_fp) != msk_len) {
-        printf("Error reading master key file.\n");
+        printf("Error: Failed to read master key file.\n");
         free(msk_data);
         fclose(msk_fp);
         bswabe_pub_free(pub);
@@ -106,11 +122,13 @@ int main(int argc, char** argv) {
     }
     fclose(msk_fp);
 
+    printf("Master key size: %ld\n", msk_len);  // In ra kích thước của master key
+
     // Dùng hàm bswabe_msk_unserialize để đọc master key
     GByteArray* msk_buf = g_byte_array_new_take(msk_data, msk_len);
     bswabe_msk_t* msk = bswabe_msk_unserialize(pub, msk_buf, 1);
     if (!msk) {
-        printf("Error unserializing master key.\n");
+        fprintf(stderr, "ERROR: Failed to unserialize master key.\n");
         bswabe_pub_free(pub);
         core_clean();
         return 1;
@@ -120,7 +138,7 @@ int main(int argc, char** argv) {
     //    => trả về bswabe_prv_t*
     bswabe_prv_t* prv = bswabe_keygen(pub, msk, attrs);
     if (!prv) {
-        printf("Error: bswabe_keygen failed (%s)\n", bswabe_error());
+        fprintf(stderr, "ERROR: bswabe_keygen() failed. Attributes might be invalid or master key corrupted.\n");
         bswabe_msk_free(msk);
         bswabe_pub_free(pub);
         core_clean();

@@ -10,7 +10,7 @@ typedef struct {
     g2_t d;      /* Thành phần G_2 */
     g1_t dp;     /* Thành phần G_1 */
     int used;    /* Cờ đánh dấu sử dụng */
-    g1_t z;      /* Thành phần G_1 */
+    g2_t z;      /* Thành phần G_2 */
     g1_t zp;     /* Thành phần G_1 */
 } bswabe_prv_comp_t;
 

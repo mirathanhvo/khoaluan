@@ -5,7 +5,9 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <glib.h>
-#include <pbc.h>
+#include <relic/relic.h>
+#include <inttypes.h>
+
 
 #include "common.h"
 #include "policy_lang.h"
@@ -64,7 +66,7 @@ cpabe_policy_t* ge_policy( sized_integer_t* n, char* attr );
 
 %%
 
-result: policy { final_policy = $1 }
+result: policy { final_policy = $1; }
 
 number:   INTLIT '#' INTLIT          { $$ = expint($1, $3); }
         | INTLIT                     { $$ = flexint($1);    }
@@ -99,10 +101,10 @@ expint( uint64_t value, uint64_t bits )
 	sized_integer_t* s;
 
 	if( bits == 0 )
-		die("error parsing policy: zero-length integer \"%llub%llu\"\n",
+		die("error parsing policy: zero-length integer \"%" PRIu64 "b%" PRIu64 "\"\n",
 				value, bits);
 	else if( bits > 64 )
-		die("error parsing policy: no more than 64 bits allowed \"%llub%llu\"\n",
+		die("error parsing policy: no more than 64 bits allowed \"%" PRIu64 "b%" PRIu64 "\"\n",
 				value, bits);
 
 	s = malloc(sizeof(sized_integer_t));
@@ -209,10 +211,10 @@ eq_policy( sized_integer_t* n, char* attr )
 {
 	if( n->bits == 0 )
 		return leaf_policy
-			(g_strdup_printf("%s_flexint_%llu", attr, n->value));
+			(g_strdup_printf("%s_flexint_%" PRIu64, attr, n->value));
 	else
 		return leaf_policy
-			(g_strdup_printf("%s_expint%02d_%llu", attr, n->bits, n->value));
+			(g_strdup_printf("%s_expint%02d_%" PRIu64, attr, n->bits, n->value));
 
 	return 0;
 }
@@ -283,15 +285,15 @@ cmp_policy( sized_integer_t* n, int gt, char* attr )
 
 	/* some error checking */
 
-	if( gt && n->value >= ((uint64_t)1<<(n->bits ? n->bits : 64)) - 1 )
-		die("error parsing policy: unsatisfiable integer comparison %s > %llu\n"
+	if( gt && n->value >= ((uint64_t)1 << (n->bits ? n->bits : 64)) - 1 )
+		die("error parsing policy: unsatisfiable integer comparison %s > %" PRIu64 "\n"
 				"(%d-bits are insufficient to satisfy)\n", attr, n->value,
 				n->bits ? n->bits : 64);
 	else if( !gt && n->value == 0 )
 		die("error parsing policy: unsatisfiable integer comparison %s < 0\n"
 				"(all numerical attributes are unsigned)\n", attr);
-	else if( !gt && n->value > ((uint64_t)1<<(n->bits ? n->bits : 64)) - 1 )
-		die("error parsing policy: trivially satisfied integer comparison %s < %llu\n"
+	else if( !gt && n->value > ((uint64_t)1 << (n->bits ? n->bits : 64)) - 1 )
+		die("error parsing policy: trivially satisfied integer comparison %s < %" PRIu64 "\n"
 				"(any %d-bit number will satisfy)\n", attr, n->value,
 				n->bits ? n->bits : 64);
 
@@ -388,7 +390,7 @@ yylex()
 		while( isdigit(PEEK_CHAR) )
 			g_string_append_c(s, NEXT_CHAR);
 
-		sscanf(s->str, "%llu", &(yylval.nat));
+		sscanf(s->str, "%" PRIu64, &(yylval.nat));
 
 		g_string_free(s, 1);
 		r = INTLIT;
@@ -574,7 +576,7 @@ parse_attribute( GSList** l, char* a )
 
 		s = malloc(sizeof(char) * strlen(a));
 
-		if( sscanf(a, " %s = %llu # %u ", s, &value, &bits) == 3 )
+		if( sscanf(a, " %s = %" PRIu64 " # %u ", s, &value, &bits) == 3 )
 		{
 			/* expint */
 
@@ -582,9 +584,10 @@ parse_attribute( GSList** l, char* a )
 				die("error parsing attribute \"%s\": 64 bits is the maximum allowed\n",
 						a, value, bits);
 
-			if( value >= ((uint64_t)1<<bits) )
-				die("error parsing attribute \"%s\": value %llu too big for %d bits\n",
-						a, value, bits);
+		if( value >= ((uint64_t)1 << bits) )
+			die("error parsing attribute \"%s\": value %" PRIu64 " too big for %d bits\n",
+					a, value, bits);
+
 
 			tplate = g_strdup_printf("%%s_expint%02d_%%s%%d%%s", bits);
 			for( i = 0; i < bits; i++ )
@@ -593,9 +596,9 @@ parse_attribute( GSList** l, char* a )
 			free(tplate);
 
 			*l = g_slist_append
-				(*l, g_strdup_printf("%s_expint%02d_%llu", s, bits, value));
+				(*l, g_strdup_printf("%s_expint%02d_%" PRIu64, s, bits, value));
 		}
-		else if( sscanf(a, " %s = %llu ", s, &value) == 2 )
+		else if( sscanf(a, " %s = %" PRIu64 " ", s, &value) == 2 )
 		{
 			/* flexint */
 
@@ -609,7 +612,7 @@ parse_attribute( GSList** l, char* a )
 					(*l, bit_marker(s, "%s_flexint_%s%d%s", i, !!((uint64_t)1<<i & value)));
 
 			*l = g_slist_append
-				(*l, g_strdup_printf("%s_flexint_%llu", s, value));
+				(*l, g_strdup_printf("%s_flexint_%" PRIu64, s, value));
 		}
 		else
 			die("error parsing attribute \"%s\"\n"
