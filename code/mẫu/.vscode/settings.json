@@ -2,7 +2,10 @@
     "files.associations": {
         "relic.h": "c",
         "bswabe.h": "c",
-        "private.h": "c"
+        "private.h": "c",
+        "common.h": "c",
+        "relic_pc.h": "c",
+        "relic_fpx.h": "c"
     },
     "cmake.sourceDirectory": "D:/Tài liệu học của Mira/khoaluan/code/mẫu/relic-main"
 }

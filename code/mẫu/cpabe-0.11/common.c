@@ -52,14 +52,27 @@ void element_from_string(g1_t h, char* s) {
     if (!s) {
         raise_error("element_from_string() received NULL string");
     }
-    g1_map(h, (uint8_t*)s, strlen(s));
+    uint8_t digest[SHA256_DIGEST_LENGTH];
+    SHA256((uint8_t*)s, strlen(s), digest);
+    g1_map(h, digest, SHA256_DIGEST_LENGTH);
+
+    // In giá trị của h_attr
+    int size = g1_size_bin(h, 1);
+    uint8_t* buf = malloc(size);
+    g1_write_bin(buf, size, h, 1);
+    printf("h_attr for %s: ", s);
+    for (int i = 0; i < size; i++) printf("%02x", buf[i]);
+    printf("\n");
+    free(buf);
 }
 
 void element_from_string_g2(g2_t h, char* s) {
     if (!s) {
         raise_error("element_from_string_g2() received NULL string");
     }
-    g2_map(h, (uint8_t*)s, strlen(s));
+    uint8_t digest[SHA256_DIGEST_LENGTH];
+    SHA256((uint8_t*)s, strlen(s), digest);
+    g2_map(h, digest, SHA256_DIGEST_LENGTH);
 }
 
 /*

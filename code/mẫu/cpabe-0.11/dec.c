@@ -104,69 +104,93 @@ void decrypt_file(char* pub_file, char* prv_file, char* in_file, char* out_file)
     bswabe_prv_t* prv = bswabe_prv_unserialize(pub, prv_buf, 1);
 
     // Read input file
-    FILE* in_fp = fopen(in_file, "rb");
-    if (!in_fp) {
-        printf("Error opening input file.\n");
-        bswabe_pub_free(pub);
-        bswabe_prv_free(prv);
-        core_clean();
-        exit(1);
+    size_t file_len;
+    uint8_t *file_buf = suck_file(in_file, &file_len);
+    if (!file_buf) {
+        die("Error reading ciphertext file");
     }
-    fseek(in_fp, 0, SEEK_END);
-    long in_file_size = ftell(in_fp);
-    fseek(in_fp, 0, SEEK_SET);
-    uint8_t* in_data = malloc(in_file_size);
-    fread(in_data, 1, in_file_size, in_fp);
-    fclose(in_fp);
 
-    // Đọc IV (12 byte)
-    uint8_t iv[12];
-    memcpy(iv, in_data, sizeof(iv));
+    // Kiểm tra kích thước file có đủ dữ liệu không:
+    size_t header_size = IV_SIZE + TAG_SIZE + 2 * sizeof(uint32_t) + AES_KEY_LEN;
+    if (file_len < header_size) {
+        die("File ciphertext quá ngắn, không hợp lệ.");
+    }
+    int offset = 0;
 
-    // Đọc GCM tag (16 byte)
-    uint8_t tag[16];
-    memcpy(tag, in_data + sizeof(iv), sizeof(tag));
+    // Đọc IV
+    printf("Before IV: offset=%d, need=%d, file_len=%d\n", offset, IV_SIZE, (int)file_len);
+    uint8_t iv[IV_SIZE];
+    memcpy(iv, file_buf + offset, IV_SIZE);
+    offset += IV_SIZE;
 
-    // Đọc header (8 byte)
-    uint32_t sym_len, abe_len;
-    memcpy(&sym_len, in_data + sizeof(iv) + sizeof(tag), sizeof(uint32_t));
-    memcpy(&abe_len, in_data + sizeof(iv) + sizeof(tag) + sizeof(uint32_t), sizeof(uint32_t));
+    // Đọc Tag
+    printf("Before tag: offset=%d, need=%d, file_len=%d\n", offset, TAG_SIZE, (int)file_len);
+    uint8_t tag[TAG_SIZE];
+    memcpy(tag, file_buf + offset, TAG_SIZE);
+    offset += TAG_SIZE;
 
-    // Chuyển từ network byte order về host order
-    sym_len = ntohl(sym_len);
-    abe_len = ntohl(abe_len);
+    // Đọc kích thước AES-encrypted data và ABE ciphertext (uint32_t)
+    uint32_t sym_len_net, abe_len_net;
+    printf("Before sym_len: offset=%d, need=%d, file_len=%d\n", offset, (int)sizeof(uint32_t), (int)file_len);
+    memcpy(&sym_len_net, file_buf + offset, sizeof(uint32_t));
+    offset += sizeof(uint32_t);
 
-    // Thêm debug print:
-    printf("DEBUG (dec): sym_len = %u, abe_len = %u\n", sym_len, abe_len);
+    printf("Before abe_len: offset=%d, need=%d, file_len=%d\n", offset, (int)sizeof(uint32_t), (int)file_len);
+    memcpy(&abe_len_net, file_buf + offset, sizeof(uint32_t));
+    offset += sizeof(uint32_t);
 
-    long expected_total = sizeof(iv) + sizeof(tag) + HEADER_SIZE + sym_len + abe_len;
-    printf("DEBUG (dec): expected total file size = %ld, actual file size = %ld\n", expected_total, in_file_size);
+    uint32_t sym_len = ntohl(sym_len_net);
+    uint32_t abe_len = ntohl(abe_len_net);
 
-    // Phần AES ciphertext nằm ngay sau header (8 byte)
-    uint8_t* encrypted_data = in_data + sizeof(iv) + sizeof(tag) + HEADER_SIZE;
-    long encrypted_data_len = sym_len;  // dùng sym_len làm độ dài ciphertext AES
+    // Đọc AES-encrypted data (sym_len bytes)
+    if (file_len < offset + sym_len) {
+        die("File ciphertext quá ngắn cho phần AES-encrypted data.");
+    }
+    uint8_t* encrypted_data = malloc(sym_len);
+    if (!encrypted_data) {
+        die("Memory allocation failed for AES-encrypted data.");
+    }
+    memcpy(encrypted_data, file_buf + offset, sym_len);
+    offset += sym_len;
 
-    // Phần CP-ABE ciphertext nằm sau phần AES ciphertext
-    long cph_data_offset = sizeof(iv) + sizeof(tag) + HEADER_SIZE + sym_len;
+    // Đọc CP-ABE ciphertext
+    if (file_len < offset + abe_len) {
+        die("File ciphertext quá ngắn cho CP-ABE ciphertext.");
+    }
     GByteArray* cph_buf = g_byte_array_new();
-    g_byte_array_append(cph_buf, in_data + cph_data_offset, abe_len);
+    g_byte_array_append(cph_buf, file_buf + offset, abe_len);
+    offset += abe_len;
 
-    // Debug print
     printf("DEBUG (dec): cph_buf->len = %u, expected = %u\n", cph_buf->len, abe_len);
+
+    // Đọc AES key
+    if (file_len < offset + AES_KEY_LEN) {
+        die("File ciphertext không chứa đủ dữ liệu cho AES key.");
+    }
+    uint8_t aes_key_file[AES_KEY_LEN];
+    memcpy(aes_key_file, file_buf + offset, AES_KEY_LEN);
+    offset += AES_KEY_LEN;
+
+    // Debug: in ra AES key đọc được từ file
+    printf("AES key (dec read from file): ");
+    for (int i = 0; i < AES_KEY_LEN; i++) {
+        printf("%02x", aes_key_file[i]);
+    }
+    printf("\n");
+
+    // Decrypt AES key with CP-ABE
+    gt_t M;
+    gt_null(M);
+    gt_new(M);
 
     // Sử dụng cph_buf để unserialize CP-ABE ciphertext.
     // Lưu ý: truyền flag = 1 để _unserialize tự giải phóng cph_buf,
     // do đó không cần gọi g_byte_array_free(cph_buf, TRUE) sau này.
     bswabe_cph_t* cph = bswabe_cph_unserialize(pub, cph_buf, 1);
 
-    // Decrypt AES key with CP-ABE
-    gt_t m;
-    gt_null(m);
-    gt_new(m);
-
-    if (!bswabe_dec(pub, prv, cph, m)) {
+    if (!bswabe_dec(pub, prv, cph, M)) {
         fprintf(stderr, "ERROR: CP-ABE decryption failed! Your attributes do not satisfy the policy.\n");
-        gt_free(m);  // tránh memory leak
+        gt_free(M);  // tránh memory leak
         bswabe_cph_free(cph);
         bswabe_pub_free(pub);
         bswabe_prv_free(prv);
@@ -174,76 +198,67 @@ void decrypt_file(char* pub_file, char* prv_file, char* in_file, char* out_file)
         exit(1);
     }
 
-    // Sau khi bswabe_dec(..., m) thành công
-    int size_before = fp12_size_bin(m, 1);
-    uint8_t *buf_before = malloc(size_before);
-    fp12_write_bin(buf_before, size_before, m, 1);
-    printf("Before gt_norm, serialized m (dec): ");
-    for (int i = 0; i < size_before; i++) {
-        printf("%02x", buf_before[i]);
+    // M chứa e(pub->g_hat_alpha, s) * 1 = e(pub->g_hat_alpha, s)
+    gt_norm(M); // Quan trọng!
+    int m_len = gt_size_bin(M, 1);
+    uint8_t* m_buf = malloc(m_len);
+    if (!m_buf) {
+        fprintf(stderr, "Memory allocation failed for m_buf.\n");
+        free(file_buf);
+        free(encrypted_data);
+        bswabe_pub_free(pub);
+        bswabe_prv_free(prv);
+        gt_free(M);
+        bswabe_cph_free(cph);
+        core_clean();
+        exit(1);
     }
-    printf("\n");
-    free(buf_before);
+    gt_write_bin(m_buf, m_len, M, 1);
 
-    gt_norm(m);
-
-    int gt_req_size = fp12_size_bin(m, 1);
-    uint8_t *buf_after = malloc(gt_req_size);
-    fp12_write_bin(buf_after, gt_req_size, m, 1);
-    printf("After gt_norm, serialized m (dec): ");
-    for (int i = 0; i < gt_req_size; i++) {
-        printf("%02x", buf_after[i]);
-    }
-    printf("\n");
-    free(buf_after);
-
-    // Tính kích thước và cấp phát buffer cho phần tử m
-    gt_req_size = fp12_size_bin(m, 1);
-    uint8_t *buffer = malloc(gt_req_size);
-    if (!buffer) {
-        die("Memory allocation error for GT buffer.\n");
-    }
-    fp12_write_bin(buffer, gt_req_size, m, 1);
-
-    // Debug: in ra giá trị serialized của m
-    printf("Serialized m (dec): ");
-    for (int i = 0; i < gt_req_size; i++) {
-        printf("%02x", buffer[i]);
-    }
-    printf("\n");
-
-    // Băm buffer để tạo AES key
     uint8_t hash[32];
-    unsigned int digest_len;
-    EVP_Digest(buffer, gt_req_size, hash, &digest_len, EVP_sha256(), NULL);
+    EVP_Digest(m_buf, m_len, hash, NULL, EVP_sha256(), NULL);
     uint8_t aes_key[16];
     memcpy(aes_key, hash, 16);
 
+    free(m_buf);
+    gt_free(M);
+
     // Debug: in ra giá trị AES key hash
-    printf("AES key (dec): ");
+    printf("AES key (dec computed): ");
     for (int i = 0; i < 16; i++) {
         printf("%02x", aes_key[i]);
     }
     printf("\n");
 
-    free(buffer);
-    gt_free(m);
-    bswabe_cph_free(cph);
+    // Debug: in ra giá trị IV và Tag
+    printf("IV: ");
+    for (int i = 0;  i < 12; i++) {
+        printf("%02x", iv[i]);
+    }
+    printf("\n");
+
+    printf("Tag: ");
+    for (int i = 0; i < 16; i++) {
+        printf("%02x", tag[i]);
+    }
+    printf("\n");
 
     // Decrypt data with AES-GCM
+    int aes_ciphertext_len = sym_len;
     EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
-    uint8_t* decrypted_data = malloc(encrypted_data_len);
+    uint8_t* decrypted_data = malloc(aes_ciphertext_len);
     int len, plaintext_len;
 
     EVP_DecryptInit_ex(ctx, EVP_aes_128_gcm(), NULL, NULL, NULL);
     EVP_DecryptInit_ex(ctx, NULL, NULL, aes_key, iv);
-    EVP_DecryptUpdate(ctx, decrypted_data, &len, encrypted_data, encrypted_data_len);
+    EVP_DecryptUpdate(ctx, decrypted_data, &len, encrypted_data, aes_ciphertext_len);
     plaintext_len = len;
     EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, 16, tag);
     if (EVP_DecryptFinal_ex(ctx, decrypted_data + len, &len) <= 0) {
         printf("AES-GCM authentication failed! Possible incorrect key.\n");
         EVP_CIPHER_CTX_free(ctx);
-        free(in_data);
+        free(file_buf);
+        free(encrypted_data);
         free(decrypted_data);
         bswabe_pub_free(pub);
         bswabe_prv_free(prv);
@@ -257,7 +272,8 @@ void decrypt_file(char* pub_file, char* prv_file, char* in_file, char* out_file)
     FILE* out_fp = fopen(out_file, "wb");
     if (!out_fp) {
         printf("Error opening output file.\n");
-        free(in_data);
+        free(file_buf);
+        free(encrypted_data);
         free(decrypted_data);
         bswabe_pub_free(pub);
         bswabe_prv_free(prv);
@@ -268,7 +284,8 @@ void decrypt_file(char* pub_file, char* prv_file, char* in_file, char* out_file)
     fclose(out_fp);
 
     // Clean up
-    free(in_data);
+    free(file_buf);
+    free(encrypted_data);
     free(decrypted_data);
     bswabe_pub_free(pub);
     bswabe_prv_free(prv);

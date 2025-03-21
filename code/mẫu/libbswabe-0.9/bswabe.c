@@ -59,6 +59,10 @@
      while (*cur_toks) {
          char* tok = *(cur_toks++);
          if(!tok || !*tok) continue;
+         
+         // In debug token
+         printf("Processing token: %s\n", tok);
+         
          int k, n;
          if (sscanf(tok, "%dof%d", &k, &n) != 2) {
              // Nút lá
@@ -80,6 +84,11 @@
      }
      if (stack->len != 1) {
          fprintf(stderr, "error parsing policy string (extra tokens)\n");
+         // Debug print: print the remaining tokens on the stack
+         for (int i = 0; i < stack->len; i++) {
+             bswabe_policy_t* node = g_ptr_array_index(stack, i);
+             printf("Remaining token on stack: %s\n", node->attr ? node->attr : "non-leaf node");
+         }
          g_ptr_array_free(stack, TRUE);
          g_strfreev(toks);
          return NULL;
@@ -109,6 +118,18 @@
          bn_new(q->coef[i]);
      }
      bn_copy(q->coef[0], zero_val);
+
+     // In giá trị của q->coef[0] ngay sau khi gọi bn_copy
+     int coef_size = bn_size_bin(q->coef[0]);
+     uint8_t* coef_buf = malloc(coef_size);
+     bn_write_bin(coef_buf, coef_size, q->coef[0]);
+     printf("Value of q->coef[0]: ");
+     for (int i = 0; i < coef_size; i++) {
+         printf("%02x", coef_buf[i]);
+     }
+     printf("\n");
+     free(coef_buf);
+
      for(int i = 1; i <= deg; i++) {
          bn_rand_mod(q->coef[i], order);
      }
@@ -139,50 +160,156 @@
  
  /* ======= fill_policy: chia sẻ bí mật s (bn_t) cho cây policy ======= */
  void fill_policy(bswabe_policy_t* p, bswabe_pub_t* pub, bn_t s) {
-     p->q = rand_poly(p->k - 1, s, pub->order);
-     if (p->children->len == 0) {
-         g1_new(p->c);
-         g2_new(p->cp);
+    p->q = rand_poly(p->k - 1, s, pub->order);
+    if (p->children->len == 0) {
+        g1_new(p->c);
+        g2_new(p->cp);
+
+        // map attr -> G1
+        g1_t h_attr;
+        g1_new(h_attr);
+        // gọi element_from_string() đã có trong common.c
+        element_from_string(h_attr, p->attr);
+
+        g1_mul(p->c, pub->g, p->q->coef[0]);
+
+        // map attr -> G2
+        g2_t h2_attr;
+        g2_new(h2_attr);
+        element_from_string_g2(h2_attr, p->attr);
+        g2_mul(p->cp, h2_attr, p->q->coef[0]);
+
+        // In giá trị của h2_attr
+        int size = g2_size_bin(h2_attr, 1);  // Nếu có hàm tương tự cho G2, hoặc bạn có thể dùng g2_size_bin nếu có
+        uint8_t* buf = malloc(size);
+        g2_write_bin(buf, size, h2_attr, 1);
+        printf("h2_attr for %s: ", p->attr);
+        for (int i = 0; i < size; i++) printf("%02x", buf[i]);
+        printf("\n");
+        free(buf);
+
+        // In giá trị của p->c và p->cp sau khi tính toán
+        size = g1_size_bin(p->c, 1);
+        buf = malloc(size);
+        g1_write_bin(buf, size, p->c, 1);
+        printf("p->c for %s: ", p->attr);
+        for (int i = 0; i < size; i++) printf("%02x", buf[i]);
+        printf("\n");
+        free(buf);
+
+        size = g2_size_bin(p->cp, 1);
+        buf = malloc(size);
+        g2_write_bin(buf, size, p->cp, 1);
+        printf("p->cp for %s: ", p->attr);
+        for (int i = 0; i < size; i++) printf("%02x", buf[i]);
+        printf("\n");
+        free(buf);
+
+        // Chuẩn hóa các phần tử
+        g1_norm(p->c, p->c);
+        g2_norm(p->cp, p->cp);
+
+        g1_free(h_attr);
+        g2_free(h2_attr);
+    } else {
+        bn_t r, t;
+        bn_null(r); bn_new(r);
+        bn_null(t); bn_new(t);
+
+        for(int i = 0; i < (int)p->children->len; i++) {
+            bn_set_dig(r, i+1);
+            eval_poly(t, p->q, r, pub->order);
+            fill_policy(g_ptr_array_index(p->children, i), pub, t);
+        }
+        bn_free(r);
+        bn_free(t);
+    }
+}
  
-         // map attr -> G1
-         g1_t h_attr;
-         g1_new(h_attr);
-         // gọi element_from_string() đã có trong common.c
-         element_from_string(h_attr, p->attr);
- 
-         g1_mul(p->c, pub->g, p->q->coef[0]);
- 
-         // map attr -> G2
-         g2_t h2_attr;
-         g2_new(h2_attr);
-         element_from_string_g2(h2_attr, p->attr);
-         g2_mul(p->cp, h2_attr, p->q->coef[0]);
- 
-         g1_free(h_attr);
-         g2_free(h2_attr);
-     } else {
-         bn_t r, t;
-         bn_null(r); bn_new(r);
-         bn_null(t); bn_new(t);
- 
-         for(int i = 0; i < (int)p->children->len; i++) {
-             bn_set_dig(r, i+1);
-             eval_poly(t, p->q, r, pub->order);
-             fill_policy(g_ptr_array_index(p->children, i), pub, t);
-         }
-         bn_free(r);
-         bn_free(t);
-     }
- }
- 
- /* ======= check_sat, pick_sat_min_leaves ======= */
- void check_sat(bswabe_policy_t* p, bswabe_prv_t* prv) {
-     // ...
- }
- 
- void pick_sat_min_leaves(bswabe_policy_t* p, bswabe_prv_t* prv) {
-     // ...
- }
+ /* ======= check_sat: duyệt cây policy để đánh dấu các nút thỏa mãn ======= */
+void check_sat(bswabe_policy_t* p, bswabe_prv_t* prv) {
+    if(p->children->len == 0) {
+        // Nút lá
+        p->satisfiable = 0;
+        for (int i = 0; i < prv->comps->len; i++) {
+            bswabe_prv_comp_t *comp = &g_array_index(prv->comps, bswabe_prv_comp_t, i);
+            // (1) Debug in
+            printf("[check_sat] leaf: policy_attr='%s', key_attr='%s'\n", p->attr, comp->attr);
+
+            if(comp->attr && strcmp(comp->attr, p->attr) == 0) {
+                p->satisfiable = 1;
+                p->attri = i;
+                // (2) Debug in
+                printf("[check_sat] match => satisfiable=1, attri=%d\n", i);
+                break;
+            }
+        }
+    } else {
+        // Nút nội
+        p->satl = g_array_new(FALSE, TRUE, sizeof(int));
+        int sat_count = 0;
+        for (int i = 0; i < p->children->len; i++) {
+            bswabe_policy_t* child = g_ptr_array_index(p->children, i);
+            check_sat(child, prv);
+            if(child->satisfiable) {
+                int idx = i + 1;
+                g_array_append_val(p->satl, idx);
+                sat_count++;
+            }
+        }
+        // Debug in
+        printf("[check_sat] node(k=%d): sat_count=%d, needed=%d\n", p->k, sat_count, p->k);
+        p->satisfiable = (sat_count >= p->k) ? 1 : 0;
+        // Debug
+        printf("[check_sat] => satisfiable=%d\n", p->satisfiable);
+    }
+}
+
+/* Hàm so sánh dùng cho qsort */
+int compare_ints(const void *a, const void *b) {
+    int int_a = *(const int*)a;
+    int int_b = *(const int*)b;
+    return int_a - int_b;
+}
+
+/* ======= pick_sat_min_leaves: tính số nút lá tối thiểu cần thiết ======= */
+void pick_sat_min_leaves(bswabe_policy_t* p, bswabe_prv_t* prv) {
+    if(p->children->len == 0) {
+        p->min_leaves = p->satisfiable ? 1 : 1000000;
+        printf("[pick_sat_min_leaves] leaf '%s' => satisfiable=%d => min_leaves=%d\n",
+               p->attr, p->satisfiable, p->min_leaves);
+    } else {
+        // Đệ quy tính min_leaves cho từng con.
+        for (int i = 0; i < p->children->len; i++) {
+            bswabe_policy_t* child = g_ptr_array_index(p->children, i);
+            pick_sat_min_leaves(child, prv);
+        }
+        // Thu thập min_leaves của các nút con thỏa mãn.
+        int n = p->children->len;
+        int *mins = malloc(sizeof(int) * n);
+        int count = 0;
+        for (int i = 0; i < n; i++) {
+            bswabe_policy_t* child = g_ptr_array_index(p->children, i);
+            if(child->satisfiable) {
+                mins[count++] = child->min_leaves;
+            }
+        }
+        if(count < p->k) {
+            // không đủ nút con thỏa mãn, đặt min_leaves là INF.
+            p->min_leaves = 1000000;
+        } else {
+            // Sắp xếp các giá trị min_leaves và cộng tổng của k giá trị nhỏ nhất.
+            qsort(mins, count, sizeof(int), compare_ints);
+            int sum = 0;
+            for (int i = 0; i < p->k; i++) {
+                sum += mins[i];
+            }
+            p->min_leaves = sum;
+        }
+        free(mins);
+        printf("[pick_sat_min_leaves] => p->min_leaves=%d\n", p->min_leaves);
+    }
+}
  
  /* ======= lagrange_coef (trong Zr) ======= */
  void lagrange_coef(bn_t r, GArray* s, int i, bn_t order) {
@@ -216,6 +343,60 @@
      gt_t A, B;
      gt_new(A); gt_new(B);
  
+     // Chuẩn hóa các phần tử trước khi gọi pc_map
+     g1_norm(p->c, p->c);
+     g2_norm(c->d, c->d);
+     g1_norm(c->dp, c->dp);
+     g2_norm(p->cp, p->cp);
+ 
+     // In giá trị của các phần tử trước khi gọi pc_map
+     int size;
+     uint8_t* buf;
+ 
+     size = g1_size_bin(p->c, 1);
+     buf = malloc(size);
+     if (!buf) {
+         die("Memory allocation failed for debug buffer.\n");
+     }
+     g1_write_bin(buf, size, p->c, 1);
+     printf("p->c: ");
+     for (int i = 0; i < size; i++) printf("%02x", buf[i]);
+     printf("\n");
+     free(buf);
+ 
+     size = g2_size_bin(c->d, 1);
+     buf = malloc(size);
+     if (!buf) {
+         die("Memory allocation failed for debug buffer.\n");
+     }
+     g2_write_bin(buf, size, c->d, 1);
+     printf("c->d: ");
+     for (int i = 0; i < size; i++) printf("%02x", buf[i]);
+     printf("\n");
+     free(buf);
+ 
+     size = g1_size_bin(c->dp, 1);
+     buf = malloc(size);
+     if (!buf) {
+         die("Memory allocation failed for debug buffer.\n");
+     }
+     g1_write_bin(buf, size, c->dp, 1);
+     printf("c->dp: ");
+     for (int i = 0; i < size; i++) printf("%02x", buf[i]);
+     printf("\n");
+     free(buf);
+ 
+     size = g2_size_bin(p->cp, 1);
+     buf = malloc(size);
+     if (!buf) {
+         die("Memory allocation failed for debug buffer.\n");
+     }
+     g2_write_bin(buf, size, p->cp, 1);
+     printf("p->cp: ");
+     for (int i = 0; i < size; i++) printf("%02x", buf[i]);
+     printf("\n");
+     free(buf);
+ 
      pc_map(A, p->c, c->d);
      pc_map(B, c->dp, p->cp);
      gt_inv(B, B);
@@ -228,6 +409,7 @@
  void dec_node_naive(gt_t r, bswabe_policy_t* p, bswabe_prv_t* prv, bswabe_pub_t* pub) {
      if(p->children->len == 0) {
          dec_leaf_naive(r, p, prv, pub);
+         printf("[dec_node_naive] leaf => p->attr='%s', attri=%d\n", p->attr, p->attri);
      } else {
          gt_t temp;
          bn_t coef;
@@ -235,11 +417,29 @@
          bn_new(coef);
          gt_set_unity(r);
  
+         printf("[dec_node_naive] internal => p->k=%d, satl->len=%d\n", p->k, p->satl->len);
+ 
          for(int i = 0; i < p->satl->len; i++){
              int idx = g_array_index(p->satl, int, i) - 1;
              dec_node_naive(temp, g_ptr_array_index(p->children, idx), prv, pub);
              lagrange_coef(coef, p->satl, g_array_index(p->satl, int, i), pub->order);
              gt_exp(temp, temp, coef);
+ 
+             // In giá trị trung gian của temp
+             int size = gt_size_bin(temp, 1);  // Lấy kích thước cần thiết cho phần tử GT (compressed)
+             uint8_t* buf = malloc(size);
+             if (buf == NULL) {
+                 fprintf(stderr, "Memory allocation failed for debug buffer.\n");
+                 exit(1);
+             }
+             gt_write_bin(buf, size, temp, 1);
+             printf("Intermediate temp: ");
+             for (int i = 0; i < size; i++) {
+                 printf("%02x", buf[i]);
+             }
+             printf("\n");
+             free(buf);
+ 
              gt_mul(r, r, temp);
          }
          gt_free(temp);
@@ -264,52 +464,114 @@
     }
     pick_sat_min_leaves(cph->p, prv);
 
+    // Tính F = e(g_hat_alpha,g)^{-s} 
     gt_t F;
     gt_new(F);
     dec_node_naive(F, cph->p, prv, pub);
 
+    // Chuẩn hoá F trước khi in
+    gt_norm(F);
+
+    // In giá trị của F
+    int buf_len = gt_size_bin(F, 1);
+    uint8_t* buf = malloc(buf_len);
+    gt_write_bin(buf, buf_len, F, 1);
+    printf("Value of F: ");
+    for (int i = 0; i < buf_len; i++) {
+        printf("%02x", buf[i]);
+    }
+    printf("\n");
+    free(buf);
+
+    // m = (cs) * F = ( M * e(g_hat_alpha,g)^s ) * e(g_hat_alpha,g)^{-s} = M
     gt_mul(m, cph->cs, F);
 
-    gt_t tmp;
-    gt_new(tmp);
-    pc_map(tmp, cph->c, prv->d);
-    gt_inv(tmp, tmp);
-    gt_mul(m, m, tmp);
+    // Chuẩn hoá m trước khi in
+    gt_norm(m);
+
+    // In giá trị của m
+    buf_len = gt_size_bin(m, 1);
+    buf = malloc(buf_len);
+    gt_write_bin(buf, buf_len, m, 1);
+    printf("Value of m (dec): ");
+    for (int i = 0; i < buf_len; i++) {
+        printf("%02x", buf[i]);
+    }
+    printf("\n");
+    free(buf);
 
     gt_free(F);
-    gt_free(tmp);
+
+    // Chuẩn hoá GT element
+    gt_norm(m);
+
     return 1;
- }
+}
  
  /* ======= bswabe_enc: mã hóa ======= */
- bswabe_cph_t* bswabe_enc(bswabe_pub_t* pub, gt_t m, char* policy) {
-     bswabe_cph_t* cph = malloc(sizeof(bswabe_cph_t));
-     if(!cph) return NULL;
- 
-     bn_t s;
-     bn_null(s); bn_new(s);
-     bn_rand_mod(s, pub->order);
- 
-     gt_new(cph->cs);
-     gt_t tmp;
-     gt_new(tmp);
-     gt_exp(tmp, pub->g_hat_alpha, s);
-     gt_mul(cph->cs, tmp, m);
-     gt_free(tmp);
- 
-     g1_new(cph->c);
-     g1_mul(cph->c, pub->h, s);
- 
-     // parse policy -> fill
-     bswabe_policy_t* root = parse_policy_postfix(policy);
-     if(!root) {
-         free(cph);
-         bn_free(s);
-         return NULL;
-     }
-     cph->p = root;
-     fill_policy(cph->p, pub, s);
- 
-     bn_free(s);
-     return cph;
+ bswabe_cph_t* bswabe_enc(bswabe_pub_t* pub, gt_t M, char* policy) {
+    bswabe_cph_t* cph = malloc(sizeof(bswabe_cph_t));
+    if (!cph) return NULL;
+
+    bn_t s;
+    bn_null(s); bn_new(s);
+    do {
+        bn_rand_mod(s, pub->order);
+    } while(bn_is_zero(s));
+
+    // In giá trị của s
+    int s_size = bn_size_bin(s);
+    uint8_t* s_buf = malloc(s_size);
+    bn_write_bin(s_buf, s_size, s);
+    printf("Value of s: ");
+    for (int i = 0; i < s_size; i++) {
+        printf("%02x", s_buf[i]);
+    }
+    printf("\n");
+    free(s_buf);
+
+    // Thay vì random M lần 2, ta đặt M = e(g, g)^s
+    gt_new(M);
+    pc_map(M, pub->g, pub->gp);    // M = e(g, gp)
+    gt_exp(M, M, s);               // M = e(g, gp)^s
+    gt_norm(M);                    
+
+    // In giá trị của M
+    int buf_len = gt_size_bin(M, 1);
+    uint8_t* buf = malloc(buf_len);
+    gt_write_bin(buf, buf_len, M, 1);
+    printf("Value of M (enc): ");
+    for (int i = 0; i < buf_len; i++) {
+        printf("%02x", buf[i]);
+    }
+    printf("\n");
+    free(buf);
+
+    // cph->cs = M * e(pub->g_hat_alpha, s)
+    gt_new(cph->cs);
+    gt_t tmp;
+    gt_new(tmp);
+    gt_exp(tmp, pub->g_hat_alpha, s); // tmp = e(g_hat_alpha, s)
+    gt_mul(cph->cs, M, tmp);          // cph->cs = M * tmp
+    gt_free(tmp);
+
+    g1_new(cph->c);
+    g1_mul(cph->c, pub->h, s);        // cph->c = h^s
+
+    // Tạo cây policy từ chuỗi policy
+    bswabe_policy_t* root = parse_policy_postfix(policy);
+    if (!root) {
+        free(cph);
+        bn_free(s);
+        return NULL;
+    }
+    cph->p = root;
+    // Lưu chuỗi policy gốc
+    cph->policy = strdup(policy);
+
+    fill_policy(cph->p, pub, s);
+
+    bn_free(s);
+    return cph;
  }
+

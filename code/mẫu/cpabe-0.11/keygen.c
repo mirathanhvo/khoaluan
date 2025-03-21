@@ -145,6 +145,13 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // In ra các thuộc tính của private key
+    printf("Generated Private Key attributes:\n");
+    for (int i = 0; i < prv->comps_len; i++) {
+        bswabe_prv_comp_t *comp = &g_array_index(prv->comps, bswabe_prv_comp_t, i);
+        printf("  Attribute %d: %s\n", i, comp->attr ? comp->attr : "(null)");
+    }
+
     // 6) Serialize private key
     GByteArray* prv_buf = bswabe_prv_serialize(prv);
 

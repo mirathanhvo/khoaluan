@@ -44,9 +44,10 @@ typedef struct bswabe_policy_s {
 
 /* Cấu trúc ciphertext */
 struct bswabe_cph_s {
-    gt_t cs; /* G_T */
-    g1_t c;  /* G_1 */
+    gt_t cs;      /* G_T */
+    g1_t c;       /* G_1 */
     bswabe_policy_t* p;
+    char* policy; /* THÊM: Lưu chuỗi policy gốc dùng khi mã hóa */
 };
 
 /* Hàm cấp phát bộ nhớ cho `bswabe_prv_t` */

@@ -3,7 +3,8 @@
 #include <glib.h>
 #include <relic.h>
 #include <relic_test.h>
-#include <arpa/inet.h> // để dùng htonl()
+#include <arpa/inet.h> // htonl()
+
 #define OPENSSL_API_COMPAT 0x10100000L
 
 #include <openssl/aes.h>
@@ -117,92 +118,55 @@ void encrypt_file(char* pub_file, char* in_file, char* out_file, char* policy) {
     }
     fclose(in_fp);
 
-    /* 4. Khởi tạo các biến bn_t và in ra order */
-    bn_t key_rand, iv_rand, order;
-    bn_null(key_rand);
-    bn_null(iv_rand);
-    bn_null(order);
-    bn_new(key_rand);
-    bn_new(iv_rand);
-    bn_new(order);
-    ep_curve_get_ord(order);
-    printf("Order in encryption: ");
-    bn_print(order);
-    printf("\n");
-
-    /* 5. Sinh số ngẫu nhiên và tính m = e(g, gp)^(key_rand) */
-    bn_rand_mod(key_rand, order);
+    /* 4. Gọi bswabe_enc => CP-ABE tự sinh s và m */
     gt_t m;
     gt_new(m);
-    pc_map(m, pub->g, pub->gp);
-    gt_exp(m, m, key_rand);
-
-    /* Debug: In ra serialized m trước canonical hóa */
-    printf("Before gt_norm, serialized m (enc): ");
-    int temp_size = fp12_size_bin(m, 1);
-    uint8_t *temp_buffer = malloc(temp_size);
-    if (!temp_buffer) {
-        printf("Error: Memory allocation failed for temp_buffer.\n");
-        exit(1);
-    }
-    fp12_write_bin(temp_buffer, temp_size, m, 1);
-    for (int i = 0; i < temp_size; i++) {
-        printf("%02x", temp_buffer[i]);
-    }
-    printf("\n");
-    free(temp_buffer);
-
-    /* Canonical hóa GT m */
-    gt_norm(m);
-    gt_norm(m);  // gọi thêm nếu cần
-
-    /* Lấy số byte yêu cầu theo fp12_size_bin */
-    int req = fp12_size_bin(m, 1);
-    printf("fp12_size_bin(m,1) = %d\n", req);
-
-    /* Cấp phát buffer chính xác theo số byte này */
-    uint8_t *buffer = malloc(req);
-    if (!buffer) {
-        fprintf(stderr, "Error: Memory allocation failed for GT buffer.\n");
+    bswabe_cph_t* cph = bswabe_enc(pub, m, policy);
+    if (!cph || !cph->p) {
+        fprintf(stderr, "ERROR: Failed to build ciphertext policy tree. Check policy syntax!\n");
         free(in_data);
         bswabe_pub_free(pub);
-        bn_free(key_rand); bn_free(iv_rand); bn_free(order);
         gt_free(m);
         core_clean();
         exit(1);
     }
 
-    /* Ghi serialize phần tử GT vào buffer, với dung lượng cấp phát chính xác */
-    fp12_write_bin(buffer, req, m, 1);
-
-    /* Debug: In ra dữ liệu serialize */
-    printf("Serialized m (enc, pack=1): ");
-    for (int i = 0; i < req; i++) {
-        printf("%02x", buffer[i]);
+    /* 5. Dùng m để tạo AES key */
+    gt_norm(m); // chuẩn hoá GT element
+    int m_len = gt_size_bin(m, 1);
+    uint8_t* m_buf = malloc(m_len);
+    if (!m_buf) {
+        fprintf(stderr, "Memory allocation failed for m_buf.\n");
+        free(in_data);
+        bswabe_pub_free(pub);
+        gt_free(m);
+        bswabe_cph_free(cph);
+        core_clean();
+        exit(1);
     }
-    printf("\n");
+    gt_write_bin(m_buf, m_len, m, 1);
 
-    /* Sinh AES key từ buffer */
-    uint8_t aes_key[16];
+    // Băm m_buf -> lấy 16 byte đầu làm aes_key
+    uint8_t hash[32];
     unsigned int digest_len;
-    if (!EVP_Digest(buffer, req, aes_key, &digest_len, EVP_sha256(), NULL)) {
-        fprintf(stderr, "Error: EVP_Digest failed.\n");
-        free(buffer);
-        free(in_data);
-        bswabe_pub_free(pub);
-        bn_free(key_rand); bn_free(iv_rand); bn_free(order);
-        gt_free(m);
-        core_clean();
-        exit(1);
-    }
-    free(buffer);
+    EVP_Digest(m_buf, m_len, hash, &digest_len, EVP_sha256(), NULL);
+    uint8_t aes_key[16];
+    memcpy(aes_key, hash, 16);
+
+    free(m_buf);
     printf("AES key (enc, pack=1): ");
     for (int i = 0; i < 16; i++) {
         printf("%02x", aes_key[i]);
     }
     printf("\n");
 
-    /* 9. Sinh IV từ iv_rand */
+    /* 6. Sinh IV từ iv_rand */
+    bn_t iv_rand, order;
+    bn_null(iv_rand);
+    bn_null(order);
+    bn_new(iv_rand);
+    bn_new(order);
+    ep_curve_get_ord(order);
     bn_rand_mod(iv_rand, order);
     int iv_bn_len = bn_size_bin(iv_rand);
     uint8_t *iv_buf = malloc(iv_bn_len);
@@ -210,8 +174,9 @@ void encrypt_file(char* pub_file, char* in_file, char* out_file, char* policy) {
         printf("Error: Memory allocation failed for IV buffer.\n");
         free(in_data);
         bswabe_pub_free(pub);
-        bn_free(key_rand); bn_free(iv_rand); bn_free(order);
+        bn_free(iv_rand); bn_free(order);
         gt_free(m);
+        bswabe_cph_free(cph);
         core_clean();
         exit(1);
     }
@@ -222,14 +187,15 @@ void encrypt_file(char* pub_file, char* in_file, char* out_file, char* policy) {
     uint8_t iv[12];
     memcpy(iv, hash_iv, 12);
 
-    /* 10. Mã hóa dữ liệu với AES-GCM */
+    /* 7. Mã hóa dữ liệu với AES-GCM */
     EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
     if (!ctx) {
         printf("Error: Failed to initialize AES context.\n");
         free(in_data);
         bswabe_pub_free(pub);
-        bn_free(key_rand); bn_free(iv_rand); bn_free(order);
+        bn_free(iv_rand); bn_free(order);
         gt_free(m);
+        bswabe_cph_free(cph);
         core_clean();
         exit(1);
     }
@@ -239,8 +205,9 @@ void encrypt_file(char* pub_file, char* in_file, char* out_file, char* policy) {
         EVP_CIPHER_CTX_free(ctx);
         free(in_data);
         bswabe_pub_free(pub);
-        bn_free(key_rand); bn_free(iv_rand); bn_free(order);
+        bn_free(iv_rand); bn_free(order);
         gt_free(m);
+        bswabe_cph_free(cph);
         core_clean();
         exit(1);
     }
@@ -255,28 +222,17 @@ void encrypt_file(char* pub_file, char* in_file, char* out_file, char* policy) {
     EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, 16, tag);
     EVP_CIPHER_CTX_free(ctx);
 
-    /* 11. CP-ABE mã hóa phần tử m theo policy */
-    bswabe_cph_t* cph = bswabe_enc(pub, m, policy);
-    if (!cph || !cph->p) {
-        fprintf(stderr, "ERROR: Failed to build ciphertext policy tree. Check policy syntax!\n");
-        free(in_data);
-        free(encrypted_data);
-        bswabe_pub_free(pub);
-        bn_free(key_rand); bn_free(iv_rand); bn_free(order);
-        gt_free(m);
-        core_clean();
-        exit(1);
-    }
+    /* 8. Serialize CP-ABE ciphertext */
     GByteArray* cph_buf = bswabe_cph_serialize(cph);
     bswabe_cph_free(cph);
     gt_free(m);
-    bn_free(key_rand); bn_free(iv_rand); bn_free(order);
+    bn_free(iv_rand); bn_free(order);
 
     printf("DEBUG (enc): ciphertext_len = %d, CP-ABE ciphertext length = %u\n", ciphertext_len, cph_buf->len);
     long total_enc = sizeof(iv) + sizeof(tag) + HEADER_SIZE + ciphertext_len + cph_buf->len;
     printf("DEBUG (enc): expected total file size = %ld\n", total_enc);
 
-    /* 12. Ghi dữ liệu đã mã hóa ra file output */
+    /* 9. Ghi dữ liệu đã mã hóa ra file output */
     FILE* out_fp = fopen(out_file, "wb");
     if (!out_fp) {
         printf("Error opening output file.\n");
@@ -287,17 +243,30 @@ void encrypt_file(char* pub_file, char* in_file, char* out_file, char* policy) {
         core_clean();
         exit(1);
     }
+
+    // Ghi IV, Tag, và các giá trị cần thiết ra file output
     fwrite(iv, 1, sizeof(iv), out_fp);           // Ghi IV (12 byte)
-    fwrite(tag, 1, sizeof(tag), out_fp);           // Ghi tag (16 byte)
-    uint32_t sym_len = htonl(ciphertext_len);      // Header cho AES ciphertext
-    uint32_t abe_len = htonl(cph_buf->len);         // Header cho CP-ABE ciphertext
+    fwrite(tag, 1, sizeof(tag), out_fp);         // Ghi tag (16 byte)
+    uint32_t sym_len = htonl(ciphertext_len);    // Header cho AES ciphertext
+    uint32_t abe_len = htonl(cph_buf->len);      // Header cho CP-ABE ciphertext
     fwrite(&sym_len, sizeof(uint32_t), 1, out_fp);
     fwrite(&abe_len, sizeof(uint32_t), 1, out_fp);
     fwrite(encrypted_data, 1, ciphertext_len, out_fp);
     fwrite(cph_buf->data, 1, cph_buf->len, out_fp);
+
+    // Sử dụng lại AES key đã tính ở bước 5 (đã lưu trong biến 'aes_key')
+    printf("AES key (enc, final): ");
+    for (int i = 0; i < AES_KEY_LEN; i++) {
+        printf("%02x", aes_key[i]);
+    }
+    printf("\n");
+
+    // Ghi AES key đã dùng cho AES-GCM vào file ciphertext
+    fwrite(aes_key, 1, AES_KEY_LEN, out_fp);
+
     fclose(out_fp);
 
-    /* 13. Clean up */
+    /* 10. Clean up */
     free(in_data);
     free(encrypted_data);
     bswabe_pub_free(pub);

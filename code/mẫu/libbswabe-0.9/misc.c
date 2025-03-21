@@ -8,6 +8,11 @@
 #include "private.h"
 #include "../cpabe-0.11/common.h"
 
+void serialize_policy(GByteArray *b, bswabe_policy_t *p);
+bswabe_policy_t* unserialize_policy(bswabe_pub_t *pub, GByteArray *b, int *offset);
+
+bswabe_policy_t* parse_policy_postfix(char* s);
+
 void serialize_uint32(GByteArray* b, uint32_t k) {
     for (int i = 3; i >= 0; i--) {
         guint8 byte = (k >> (i * 8)) & 0xFF;
@@ -47,6 +52,7 @@ void unserialize_bn(GByteArray* b, int* offset, bn_t n) {
 /* Serialize G1 */
 void serialize_g1(GByteArray* b, g1_t e) {
     uint32_t len = g1_size_bin(e, 1);
+    printf("serialize_g1: len = %u\n", len);  // Thêm dòng debug
     serialize_uint32(b, len);
     unsigned char* buf = malloc(len);
     if (!buf) {
@@ -60,6 +66,7 @@ void serialize_g1(GByteArray* b, g1_t e) {
 
 void unserialize_g1(GByteArray* b, int* offset, g1_t e) {
     uint32_t len = unserialize_uint32(b, offset);
+    printf("unserialize_g1: offset = %d, len = %u, total buffer len = %u\n", *offset, len, b->len);  // Debug
     if (*offset + len > b->len) {
         fprintf(stderr, "ERROR: Buffer too small in unserialize_g1().\n");
         exit(1);
@@ -364,21 +371,22 @@ GByteArray* bswabe_prv_serialize(bswabe_prv_t* prv) {
 bswabe_cph_t* bswabe_cph_unserialize(bswabe_pub_t* pub, GByteArray* buf, int free_flag) {
     int offset = 0;
     bswabe_cph_t* cph = malloc(sizeof(bswabe_cph_t));
-    if (!cph) {
-        return NULL;
-    }
-
-    // Khởi tạo các thành phần của ciphertext
+    if (!cph) return NULL;
+    
     gt_null(cph->cs);
     gt_new(cph->cs);
-
     g1_null(cph->c);
     g1_new(cph->c);
-
-    // Giả sử thứ tự serialize là: cs, c.
+    
     unserialize_gt(buf, &offset, cph->cs);
     unserialize_g1(buf, &offset, cph->c);
-
+    
+    // Unserialize cây policy toàn bộ
+    cph->p = unserialize_policy(pub, buf, &offset);
+    
+    // Nếu cần, có thể khôi phục chuỗi policy gốc (tùy chọn)
+    // cph->policy = strdup(...);
+    
     if (free_flag) {
         g_byte_array_free(buf, TRUE);
     }
@@ -388,9 +396,11 @@ bswabe_cph_t* bswabe_cph_unserialize(bswabe_pub_t* pub, GByteArray* buf, int fre
 // Hàm serialize ciphertext: chuyển đối tượng bswabe_cph_t thành một GByteArray
 GByteArray* bswabe_cph_serialize(bswabe_cph_t* cph) {
     GByteArray* buf = g_byte_array_new();
-    // Serialize theo thứ tự: cs, c.
+    // Serialize cs và c
     serialize_gt(buf, cph->cs);
     serialize_g1(buf, cph->c);
+    // Serialize toàn bộ cây policy
+    serialize_policy(buf, cph->p);
     return buf;
 }
 
@@ -403,4 +413,103 @@ void bswabe_cph_free(bswabe_cph_t* cph) {
     gt_free(cph->cs);
     g1_free(cph->c);
     free(cph);
+}
+
+void serialize_policy(GByteArray *b, bswabe_policy_t *p) {
+    // Serialize ngưỡng k
+    serialize_uint32(b, (uint32_t) p->k);
+    
+    // Serialize số lượng con
+    uint32_t num_children = p->children->len;
+    serialize_uint32(b, num_children);
+    
+    // Nếu là nút lá (leaf) thì num_children == 0
+    if(num_children == 0) {
+        // Serialize chuỗi attribute (nếu có)
+        if(p->attr != NULL) {
+            uint32_t attr_len = (uint32_t) strlen(p->attr); 
+            serialize_uint32(b, attr_len);
+            g_byte_array_append(b, (const guint8*) p->attr, attr_len);
+        } else {
+            serialize_uint32(b, 0);
+        }
+        // Serialize p->c (G1)
+        serialize_g1(b, p->c);
+        // Serialize p->cp (G2)
+        serialize_g2(b, p->cp);
+        // Serialize đa thức q:
+        if(p->q != NULL) {
+            serialize_uint32(b, (uint32_t) p->q->deg);
+            for (int i = 0; i <= p->q->deg; i++) {
+                serialize_bn(b, p->q->coef[i]);
+            }
+        } else {
+            // Nếu không có đa thức, ghi 0 (bậc 0) – tùy chọn, hoặc một giá trị đặc biệt như 0.
+            serialize_uint32(b, 0);
+        }
+    } else {
+        // Nếu là nút nội, không có attribute và các phần tử tính toán, chỉ cần đệ quy serialize các con.
+        for (int i = 0; i < num_children; i++) {
+            bswabe_policy_t *child = g_ptr_array_index(p->children, i);
+            serialize_policy(b, child);
+        }
+    }
+}
+
+bswabe_policy_t* unserialize_policy(bswabe_pub_t *pub, GByteArray *b, int *offset) {
+    // Cấp phát bộ nhớ cho một nút policy mới
+    bswabe_policy_t *p = malloc(sizeof(bswabe_policy_t));
+    if (!p) {
+        die("Memory allocation failed in unserialize_policy()");
+    }
+    p->children = g_ptr_array_new();
+    p->q = NULL;
+    p->attr = NULL; // khởi tạo mặc định
+    p->satl = g_array_new(FALSE, FALSE, sizeof(int));
+    
+    // Đọc ngưỡng k
+    p->k = (int) unserialize_uint32(b, offset);
+    // Đọc số lượng children
+    uint32_t num_children = unserialize_uint32(b, offset);
+    
+    if(num_children == 0) {
+        // Đây là nút lá, nên đọc chuỗi attribute
+        uint32_t attr_len = unserialize_uint32(b, offset);
+        if(attr_len > 0) {
+            p->attr = malloc(attr_len + 1);
+            if (!p->attr) die("Memory allocation failed in unserialize_policy (attr)");
+            memcpy(p->attr, b->data + *offset, attr_len);
+            p->attr[attr_len] = '\0';
+            *offset += attr_len;
+        }
+        // Khởi tạo và unserialize p->c (G1)
+        g1_null(p->c);
+        g1_new(p->c);
+        unserialize_g1(b, offset, p->c);
+        // Khởi tạo và unserialize p->cp (G2)
+        g2_null(p->cp);
+        g2_new(p->cp);
+        unserialize_g2(b, offset, p->cp);
+        // Đọc đa thức q:
+        uint32_t deg = unserialize_uint32(b, offset);
+            p->q = malloc(sizeof(bswabe_polynomial_t));
+            if(!p->q) die("Memory allocation failed in unserialize_policy (poly)");
+            p->q->deg = (int) deg;
+            p->q->coef = malloc((p->q->deg + 1) * sizeof(bn_t));
+            if(!p->q->coef) die("Memory allocation failed in unserialize_policy (coef)");
+            for (int i = 0; i <= p->q->deg; i++) {
+                // Cấp phát và đọc từng hệ số bn
+                bn_null(p->q->coef[i]);
+                bn_new(p->q->coef[i]);
+                unserialize_bn(b, offset, p->q->coef[i]);
+            }
+    } else {
+        // Nếu là nút nội, không có attribute và các phần tử tính toán của lá.
+        // Đệ quy unserialize từng nút con
+        for (int i = 0; i < num_children; i++) {
+            bswabe_policy_t *child = unserialize_policy(pub, b, offset);
+            g_ptr_array_add(p->children, child);
+        }
+    }
+    return p;
 }

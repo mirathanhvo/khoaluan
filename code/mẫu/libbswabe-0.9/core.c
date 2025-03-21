@@ -158,6 +158,10 @@ bswabe_prv_t* bswabe_keygen(bswabe_pub_t* pub, bswabe_msk_t* msk, char** attribu
         // d = g^r_i
         g2_mul_gen(c.d, r); // hoặc ep2_mul(c.d, gp, r);
 
+        // Chuẩn hóa các thành phần
+        g1_norm(c.dp, c.dp);
+        g2_norm(c.d, c.d);
+
         // (Tùy chọn) nếu hệ thống bạn có gp, h2:
         g2_mul(c.z, pub->gp, r);
         g1_t h_attr2;
@@ -165,11 +169,21 @@ bswabe_prv_t* bswabe_keygen(bswabe_pub_t* pub, bswabe_msk_t* msk, char** attribu
         hash_attr2(h_attr2, attributes[i]);
         g1_mul(c.zp, h_attr2, r);
 
+        // Chuẩn hóa các thành phần tùy chọn
+        g1_norm(c.zp, c.zp);
+        g2_norm(c.z, c.z);
+
         g_array_append_val(prv->comps, c);
 
         // Dọn r
         bn_free(r);
     }
+
+    // Cập nhật comps_len sau khi thêm tất cả các attribute components
+    prv->comps_len = prv->comps->len;
+
+    // Debug: In ra số lượng thuộc tính được thêm
+    printf("Debug: Number of attributes added = %d\n", (int)prv->comps->len);
 
     bn_free(order);
     bn_free(r);

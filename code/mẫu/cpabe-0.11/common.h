@@ -11,6 +11,9 @@ static inline void fp12_norm(fp12_t m) {
     fp12_conv_cyc(m, m);
 }
 #endif
+#define AES_KEY_LEN 16
+#define IV_SIZE 12      // ví dụ dùng AES-GCM IV 96-bit
+#define TAG_SIZE 16     // Tag 128-bit của AES-GCM
 
 #define gt_norm(m) fp12_norm(m)
 #define SAFE_GT_CAPACITY 1024 
