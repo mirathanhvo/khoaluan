@@ -10,8 +10,10 @@
 
 void serialize_policy(GByteArray *b, bswabe_policy_t *p);
 bswabe_policy_t* unserialize_policy(bswabe_pub_t *pub, GByteArray *b, int *offset);
-
 bswabe_policy_t* parse_policy_postfix(char* s);
+void print_g1(const char *label, g1_t a);
+void print_g2(const char *label, g2_t a);
+
 
 void serialize_uint32(GByteArray* b, uint32_t k) {
     for (int i = 3; i >= 0; i--) {
@@ -53,6 +55,7 @@ void unserialize_bn(GByteArray* b, int* offset, bn_t n) {
 void serialize_g1(GByteArray* b, g1_t e) {
     uint32_t len = g1_size_bin(e, 1);
     printf("serialize_g1: len = %u\n", len);  // Thêm dòng debug
+    print_g1("serialize_g1 value", e);  // Print g1 value
     serialize_uint32(b, len);
     unsigned char* buf = malloc(len);
     if (!buf) {
@@ -79,12 +82,15 @@ void unserialize_g1(GByteArray* b, int* offset, g1_t e) {
     memcpy(buf, b->data + *offset, len);
     *offset += len;
     g1_read_bin(e, buf, len);
+    print_g1("unserialize_g1 value", e);  // Print g1 value
     free(buf);
 }
 
 /* Serialize G2 */
 void serialize_g2(GByteArray* b, g2_t e) {
     uint32_t len = g2_size_bin(e, 1);
+    printf("serialize_g2: len = %u\n", len);  // Thêm dòng debug
+    print_g2("serialize_g2 value", e);  // Print g2 value
     serialize_uint32(b, len);
     unsigned char* buf = malloc(len);
     if (!buf) {
@@ -98,6 +104,7 @@ void serialize_g2(GByteArray* b, g2_t e) {
 
 void unserialize_g2(GByteArray* b, int* offset, g2_t e) {
     uint32_t len = unserialize_uint32(b, offset);
+    printf("unserialize_g2: offset = %d, len = %u, total buffer len = %u\n", *offset, len, b->len);  // Debug
     if (*offset + len > b->len) {
         fprintf(stderr, "ERROR: Buffer too small in unserialize_g2().\n");
         exit(1);
@@ -110,6 +117,7 @@ void unserialize_g2(GByteArray* b, int* offset, g2_t e) {
     memcpy(buf, b->data + *offset, len);
     *offset += len;
     g2_read_bin(e, buf, len);
+    print_g2("unserialize_g2 value", e);  // Print g2 value
     free(buf);
 }
 
@@ -512,4 +520,45 @@ bswabe_policy_t* unserialize_policy(bswabe_pub_t *pub, GByteArray *b, int *offse
         }
     }
     return p;
+}
+
+void print_g1(const char *label, g1_t a) {
+    int size = g1_size_bin(a, 1);
+    uint8_t *buf = malloc(size);
+    if (!buf) { perror("malloc"); exit(1); }
+    g1_write_bin(buf, size, a, 1);
+    printf("%s: ", label);
+    for (int i = 0; i < size; i++) {
+        printf("%02x", buf[i]);
+    }
+    printf("\n");
+    free(buf);
+}
+
+void print_g2(const char *label, g2_t a) {
+    int size = g2_size_bin(a, 1);
+    uint8_t *buf = malloc(size);
+    if (!buf) { perror("malloc"); exit(1); }
+    g2_write_bin(buf, size, a, 1);
+    printf("%s: ", label);
+    for (int i = 0; i < size; i++) {
+        printf("%02x", buf[i]);
+    }
+    printf("\n");
+    free(buf);
+}
+
+void print_bn(bn_t bn) {
+    int size = bn_size_bin(bn);
+    uint8_t* buf = malloc(size);
+    if (!buf) {
+        perror("malloc");
+        exit(1);
+    }
+    bn_write_bin(buf, size, bn);
+    for (int i = 0; i < size; i++) {
+        printf("%02x", buf[i]);
+    }
+    printf("\n");
+    free(buf);
 }

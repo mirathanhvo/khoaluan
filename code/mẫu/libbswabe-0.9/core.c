@@ -12,11 +12,14 @@
 
 #include "bswabe.h"
 #include "private.h"
-#include "common.h"  // <-- để dùng raise_error(), v.v. nếu cần
+#include "common.h" 
 
 // nếu chưa có, thêm prototype
 void hash_attr(g1_t h, char* attr);
 void hash_attr2(g1_t h, char* attr);
+void print_bn(bn_t n);
+void print_g1(const char *label, g1_t a);
+void print_g2(const char *label, g2_t a);
 
 // định nghĩa hàm nếu chưa có
 void hash_attr(g1_t h, char* attr) {
@@ -84,6 +87,28 @@ void bswabe_setup(bswabe_pub_t** pub, bswabe_msk_t** msk) {
     bn_new((*pub)->order);
     bn_copy((*pub)->order, order);
 
+    // Debug prints
+    printf("Setup Phase:\n");
+    printf("α: ");
+    print_bn(alpha);  // Hàm print_bn in bn_t dưới dạng hex
+    printf("β: ");
+    print_bn((*msk)->beta);
+    print_g1("g1", g);
+    print_g2("g2", gp);
+    print_g1("h = g1^β", (*pub)->h);
+    printf("e(g1, g2)^α: ");
+    int gt_size = gt_size_bin((*pub)->g_hat_alpha, 1);
+    uint8_t* gt_buf = malloc(gt_size);
+    if (!gt_buf) {
+        raise_error("Memory allocation failed for gt_buf");
+    }
+    gt_write_bin(gt_buf, gt_size, (*pub)->g_hat_alpha, 1);
+    for (int i = 0; i < gt_size; i++) {
+        printf("%02x", gt_buf[i]);
+    }
+    printf("\n");
+    free(gt_buf);
+
     bn_free(alpha);
     bn_free(order);
     g1_free(g);
@@ -128,54 +153,57 @@ bswabe_prv_t* bswabe_keygen(bswabe_pub_t* pub, bswabe_msk_t* msk, char** attribu
     for (int i = 0; attributes[i]; i++) {
         bswabe_prv_comp_t c;
 
-        // Copy attribute name
+        // Copy tên thuộc tính
         c.attr = strdup(attributes[i]);
         if (!c.attr) {
             raise_error("Memory allocation failed in strdup()");
         }
 
-        // Sinh ngẫu nhiên r_i
+        // Sinh số ngẫu nhiên r_i
         bn_t r;
         bn_null(r);
         bn_new(r);
         bn_rand_mod(r, order);
 
-        // Tính toán các thành phần:
-        // d = g^r_i
-        // dp = H(attr)^r_i
-        // z = gp^r_i (optional)
-        // zp = H'(attr)^r_i (optional)
+        // Tính toán các thành phần của thành phần thuộc tính:
+        // d = g^{r_i} (G2), dp = H(attr)^{r_i} (G1)
+        // Và các thành phần mở rộng nếu có: z = gp^{r_i} (G2), zp = H'(attr)^{r_i} (G1)
+        g1_new(c.dp); g1_new(c.zp);
+        g2_new(c.d); g2_new(c.z);
 
-        g1_new(c.dp); g1_new(c.zp); // nếu bạn dùng thêm
-        g2_new(c.d); g2_new(c.z);   // nếu bạn dùng thêm
-
-        // dp = H(attr)^r_i
+        // dp = H(attr)^{r_i}
         g1_t h_attr;
         g1_null(h_attr); g1_new(h_attr);
-        hash_attr(h_attr, attributes[i]); // giả sử bạn có hàm này
+        hash_attr(h_attr, attributes[i]);
         g1_mul(c.dp, h_attr, r);
 
-        // d = g^r_i
-        g2_mul_gen(c.d, r); // hoặc ep2_mul(c.d, gp, r);
+        // d = g^{r_i}
+        g2_mul_gen(c.d, r);
 
         // Chuẩn hóa các thành phần
         g1_norm(c.dp, c.dp);
         g2_norm(c.d, c.d);
 
-        // (Tùy chọn) nếu hệ thống bạn có gp, h2:
+        // Nếu hệ thống bạn sử dụng các thành phần mở rộng:
         g2_mul(c.z, pub->gp, r);
         g1_t h_attr2;
         g1_null(h_attr2); g1_new(h_attr2);
         hash_attr2(h_attr2, attributes[i]);
         g1_mul(c.zp, h_attr2, r);
 
-        // Chuẩn hóa các thành phần tùy chọn
         g1_norm(c.zp, c.zp);
         g2_norm(c.z, c.z);
 
+        // --- Bổ sung in ra thông tin cho mỗi thành phần thuộc tính ---
+        printf("Keygen: Attribute: %s\n", c.attr);
+        print_g1("  dp", c.dp);
+        print_g2("  d", c.d);
+        print_g1("  zp", c.zp);
+        print_g2("  z", c.z);
+        // -------------------------------------------------------
+
         g_array_append_val(prv->comps, c);
 
-        // Dọn r
         bn_free(r);
     }
 

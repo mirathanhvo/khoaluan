@@ -9,7 +9,7 @@
 
  #include "bswabe.h"
  #include "private.h"
- #include "common.h"        // <-- Dùng prototype cho raise_error(), element_from_string()... nếu cần
+ #include "common.h"     
  #include <relic/relic.h>
  #include <glib.h>
  #include <stdlib.h>
