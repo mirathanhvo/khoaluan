@@ -90,7 +90,7 @@ void bswabe_setup(bswabe_pub_t** pub, bswabe_msk_t** msk) {
     // Debug prints
     printf("Setup Phase:\n");
     printf("α: ");
-    print_bn(alpha);  // Hàm print_bn in bn_t dưới dạng hex
+    print_bn(alpha);  
     printf("β: ");
     print_bn((*msk)->beta);
     print_g1("g1", g);
@@ -174,7 +174,19 @@ bswabe_prv_t* bswabe_keygen(bswabe_pub_t* pub, bswabe_msk_t* msk, char** attribu
         // dp = H(attr)^{r_i}
         g1_t h_attr;
         g1_null(h_attr); g1_new(h_attr);
-        hash_attr(h_attr, attributes[i]);
+        element_from_string(h_attr, attributes[i]); // Use element_from_string instead of hash_attr
+
+        // Debug: In ra giá trị ánh xạ của thuộc tính ở keygen
+        int size = g1_size_bin(h_attr, 1);
+        uint8_t* buf = malloc(size);
+        g1_write_bin(buf, size, h_attr, 1);
+        printf("DEBUG keygen: Mapped attribute '%s' in G1: ", attributes[i]);
+        for (int j = 0; j < size; j++) {
+            printf("%02x", buf[j]);
+        }
+        printf("\n");
+        free(buf);
+
         g1_mul(c.dp, h_attr, r);
 
         // d = g^{r_i}
@@ -188,7 +200,7 @@ bswabe_prv_t* bswabe_keygen(bswabe_pub_t* pub, bswabe_msk_t* msk, char** attribu
         g2_mul(c.z, pub->gp, r);
         g1_t h_attr2;
         g1_null(h_attr2); g1_new(h_attr2);
-        hash_attr2(h_attr2, attributes[i]);
+        element_from_string(h_attr2, attributes[i]); // Use element_from_string instead of hash_attr2
         g1_mul(c.zp, h_attr2, r);
 
         g1_norm(c.zp, c.zp);

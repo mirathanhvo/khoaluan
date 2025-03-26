@@ -27,6 +27,8 @@
     vì chúng đã được định nghĩa trong common.c
  */
  
+ void print_bn(bn_t bn);
+
  /* ======= Hàm khởi tạo nút policy ======= */
  bswabe_policy_t* base_node(int k, char* s) {
      bswabe_policy_t* p = malloc(sizeof(bswabe_policy_t));
@@ -171,7 +173,22 @@
         // gọi element_from_string() đã có trong common.c
         element_from_string(h_attr, p->attr);
 
-        g1_mul(p->c, pub->g, p->q->coef[0]);
+        int size;
+        uint8_t* buf;
+
+        // Debug: In ra giá trị ánh xạ của thuộc tính ở fill_policy
+        size = g1_size_bin(h_attr, 1);
+        buf = malloc(size);
+        g1_write_bin(buf, size, h_attr, 1);
+        printf("DEBUG fill_policy: Mapped attribute '%s' in G1: ", p->attr);
+        for (int j = 0; j < size; j++) {
+            printf("%02x", buf[j]);
+        }
+        printf("\n");
+        free(buf);
+
+        // Thay đổi từ pub->g thành h_attr
+        g1_mul(p->c, h_attr, p->q->coef[0]);
 
         // map attr -> G2
         g2_t h2_attr;
@@ -180,8 +197,8 @@
         g2_mul(p->cp, h2_attr, p->q->coef[0]);
 
         // In giá trị của h2_attr
-        int size = g2_size_bin(h2_attr, 1);  // Nếu có hàm tương tự cho G2, hoặc bạn có thể dùng g2_size_bin nếu có
-        uint8_t* buf = malloc(size);
+        size = g2_size_bin(h2_attr, 1);  // Nếu có hàm tương tự cho G2, hoặc bạn có thể dùng g2_size_bin nếu có
+        buf = malloc(size);
         g2_write_bin(buf, size, h2_attr, 1);
         printf("h2_attr for %s: ", p->attr);
         for (int i = 0; i < size; i++) printf("%02x", buf[i]);
@@ -228,18 +245,16 @@
  
  /* ======= check_sat: duyệt cây policy để đánh dấu các nút thỏa mãn ======= */
 void check_sat(bswabe_policy_t* p, bswabe_prv_t* prv) {
-    if(p->children->len == 0) {
+    if (p->children->len == 0) {
         // Nút lá
         p->satisfiable = 0;
         for (int i = 0; i < prv->comps->len; i++) {
-            bswabe_prv_comp_t *comp = &g_array_index(prv->comps, bswabe_prv_comp_t, i);
-            // (1) Debug in
+            bswabe_prv_comp_t* comp = &g_array_index(prv->comps, bswabe_prv_comp_t, i);
+            // Debug: In ra giá trị so sánh thuộc tính
             printf("[check_sat] leaf: policy_attr='%s', key_attr='%s'\n", p->attr, comp->attr);
-
-            if(comp->attr && strcmp(comp->attr, p->attr) == 0) {
+            if (comp->attr && strcmp(comp->attr, p->attr) == 0) {
                 p->satisfiable = 1;
                 p->attri = i;
-                // (2) Debug in
                 printf("[check_sat] match => satisfiable=1, attri=%d\n", i);
                 break;
             }
@@ -251,16 +266,20 @@ void check_sat(bswabe_policy_t* p, bswabe_prv_t* prv) {
         for (int i = 0; i < p->children->len; i++) {
             bswabe_policy_t* child = g_ptr_array_index(p->children, i);
             check_sat(child, prv);
-            if(child->satisfiable) {
+            if (child->satisfiable) {
                 int idx = i + 1;
                 g_array_append_val(p->satl, idx);
                 sat_count++;
             }
         }
-        // Debug in
+        // Debug: In toàn bộ mảng p->satl và số lượng
         printf("[check_sat] node(k=%d): sat_count=%d, needed=%d\n", p->k, sat_count, p->k);
+        printf("[check_sat] p->satl contents: ");
+        for (int i = 0; i < p->satl->len; i++) {
+            printf("%d ", g_array_index(p->satl, int, i));
+        }
+        printf("\n");
         p->satisfiable = (sat_count >= p->k) ? 1 : 0;
-        // Debug
         printf("[check_sat] => satisfiable=%d\n", p->satisfiable);
     }
 }
@@ -314,23 +333,26 @@ void pick_sat_min_leaves(bswabe_policy_t* p, bswabe_prv_t* prv) {
  /* ======= lagrange_coef (trong Zr) ======= */
  void lagrange_coef(bn_t r, GArray* s, int i, bn_t order) {
      bn_t t;
-     bn_null(t); bn_new(t);
-     bn_set_dig(r, 1);
- 
-     for(int idx = 0; idx < (int)s->len; idx++){
-         int jj = g_array_index(s, int, idx);
-         if(jj == i) continue;
- 
-         bn_set_dig(t, (jj > 0) ? jj : -jj);
-         if(jj > 0) bn_neg(t, t);
+     bn_null(t); 
+     bn_new(t);
+     bn_set_dig(r, 1); // Initialize r to 1
+
+     for (int idx = 0; idx < (int)s->len; idx++) {
+         int j = g_array_index(s, int, idx);
+         if (j == i) 
+             continue;
+
+         // Calculate (-j)
+         bn_set_dig(t, j);
+         bn_neg(t, t);
          bn_mod(t, t, order);
          bn_mul(r, r, t);
          bn_mod(r, r, order);
- 
-         bn_set_dig(t, (i - jj) < 0 ? -(i-jj) : (i-jj));
-         if((i-jj) < 0) bn_neg(t, t);
+
+         // Calculate (i - j)
+         bn_set_dig(t, i - j);
          bn_mod(t, t, order);
-         bn_mod_inv(t, t, order);
+         bn_mod_inv(t, t, order); // Modular inverse of (i - j)
          bn_mul(r, r, t);
          bn_mod(r, r, order);
      }
@@ -416,31 +438,49 @@ void pick_sat_min_leaves(bswabe_policy_t* p, bswabe_prv_t* prv) {
          gt_new(temp);
          bn_new(coef);
          gt_set_unity(r);
- 
+
+         // In mảng p->satl trước vòng lặp
+         printf("[dec_node_naive] p->satl contents: ");
+         for (int idx = 0; idx < p->satl->len; idx++) {
+             printf("%d ", g_array_index(p->satl, int, idx));
+         }
+         printf("\n");
+
          printf("[dec_node_naive] internal => p->k=%d, satl->len=%d\n", p->k, p->satl->len);
- 
-         for(int i = 0; i < p->satl->len; i++){
+
+         for (int i = 0; i < p->satl->len; i++) {
              int idx = g_array_index(p->satl, int, i) - 1;
              dec_node_naive(temp, g_ptr_array_index(p->children, idx), prv, pub);
              lagrange_coef(coef, p->satl, g_array_index(p->satl, int, i), pub->order);
+
+             // In hệ số lambda (Lagrange coefficient)
+             {
+                 char coef_str[256];
+                 bn_write_str(coef_str, 256, coef, 16); // Convert to hexadecimal string
+                 printf("[dec_node_naive] Lambda coefficient for index %d: %s\n", g_array_index(p->satl, int, i), coef_str);
+             }
+
              gt_exp(temp, temp, coef);
- 
-             // In giá trị trung gian của temp
-             int size = gt_size_bin(temp, 1);  // Lấy kích thước cần thiết cho phần tử GT (compressed)
-             uint8_t* buf = malloc(size);
-             if (buf == NULL) {
-                 fprintf(stderr, "Memory allocation failed for debug buffer.\n");
-                 exit(1);
+
+             // In giá trị intermediate của temp sau exponentiation
+             {
+                 int size = gt_size_bin(temp, 1);
+                 uint8_t* buf = malloc(size);
+                 if (buf == NULL) {
+                     fprintf(stderr, "Memory allocation failed for debug buffer in dec_node_naive.\n");
+                     exit(1);
+                 }
+                 gt_write_bin(buf, size, temp, 1);
+                 printf("[dec_node_naive] Intermediate temp after exponentiation: ");
+                 for (int j = 0; j < size; j++) {
+                     printf("%02x", buf[j]);
+                 }
+                 printf("\n");
+                 free(buf);
              }
-             gt_write_bin(buf, size, temp, 1);
-             printf("Intermediate temp: ");
-             for (int i = 0; i < size; i++) {
-                 printf("%02x", buf[i]);
-             }
-             printf("\n");
-             free(buf);
- 
+
              gt_mul(r, r, temp);
+             gt_norm(r); // Corrected normalization
          }
          gt_free(temp);
          bn_free(coef);
@@ -509,17 +549,18 @@ void pick_sat_min_leaves(bswabe_policy_t* p, bswabe_prv_t* prv) {
 }
  
  /* ======= bswabe_enc: mã hóa ======= */
- bswabe_cph_t* bswabe_enc(bswabe_pub_t* pub, gt_t M, char* policy) {
+ bswabe_cph_t* bswabe_enc(bswabe_pub_t* pub, gt_t m, char* policy) {
     bswabe_cph_t* cph = malloc(sizeof(bswabe_cph_t));
     if (!cph) return NULL;
 
     bn_t s;
-    bn_null(s); bn_new(s);
+    bn_null(s); 
+    bn_new(s);
     do {
         bn_rand_mod(s, pub->order);
-    } while(bn_is_zero(s));
+    } while (bn_is_zero(s));
 
-    // In giá trị của s
+    // Debug: Print the value of s
     int s_size = bn_size_bin(s);
     uint8_t* s_buf = malloc(s_size);
     bn_write_bin(s_buf, s_size, s);
@@ -530,35 +571,34 @@ void pick_sat_min_leaves(bswabe_policy_t* p, bswabe_prv_t* prv) {
     printf("\n");
     free(s_buf);
 
-    // Thay vì random M lần 2, ta đặt M = e(g, g)^s
-    gt_new(M);
-    pc_map(M, pub->g, pub->gp);    // M = e(g, gp)
-    gt_exp(M, M, s);               // M = e(g, gp)^s
-    gt_norm(M);                    
+    // Use the caller-provided m variable
+    pc_map(m, pub->g, pub->gp);    // m = e(g, gp)
+    gt_exp(m, m, s);               // m = m^s = e(g, gp)^s
+    gt_norm(m);                    // Normalize m
 
-    // In giá trị của M
-    int buf_len = gt_size_bin(M, 1);
+    // Debug: Print the value of m
+    int buf_len = gt_size_bin(m, 1);
     uint8_t* buf = malloc(buf_len);
-    gt_write_bin(buf, buf_len, M, 1);
-    printf("Value of M (enc): ");
+    gt_write_bin(buf, buf_len, m, 1);
+    printf("Value of m (enc): ");
     for (int i = 0; i < buf_len; i++) {
         printf("%02x", buf[i]);
     }
     printf("\n");
     free(buf);
 
-    // cph->cs = M * e(pub->g_hat_alpha, s)
+    // cph->cs = m * e(pub->g_hat_alpha, s)
     gt_new(cph->cs);
     gt_t tmp;
     gt_new(tmp);
     gt_exp(tmp, pub->g_hat_alpha, s); // tmp = e(g_hat_alpha, s)
-    gt_mul(cph->cs, M, tmp);          // cph->cs = M * tmp
+    gt_mul(cph->cs, m, tmp);          // cph->cs = m * tmp
     gt_free(tmp);
 
     g1_new(cph->c);
     g1_mul(cph->c, pub->h, s);        // cph->c = h^s
 
-    // Tạo cây policy từ chuỗi policy
+    // Parse the policy string into a policy tree
     bswabe_policy_t* root = parse_policy_postfix(policy);
     if (!root) {
         free(cph);
@@ -566,12 +606,11 @@ void pick_sat_min_leaves(bswabe_policy_t* p, bswabe_prv_t* prv) {
         return NULL;
     }
     cph->p = root;
-    // Lưu chuỗi policy gốc
-    cph->policy = strdup(policy);
+    cph->policy = strdup(policy); // Save the original policy string
 
     fill_policy(cph->p, pub, s);
 
     bn_free(s);
     return cph;
- }
+}
 
