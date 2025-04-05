@@ -3,7 +3,7 @@
 
 #include <glib.h>
 #include <relic/relic.h>
-#include "private.h"  // nếu cần dùng bswabe_prv_t
+#include "private.h"  
 
 #ifdef __cplusplus
 extern "C" {
@@ -27,9 +27,9 @@ typedef struct {
 typedef struct bswabe_cph_s bswabe_cph_t;
 
 /* API Functions */
-void bswabe_setup(bswabe_pub_t** pub, bswabe_msk_t** msk);
+void bswabe_setup(bswabe_pub_t** pub, bswabe_msk_t** msk, g1_t g, g2_t gp, bn_t alpha, bn_t beta, bn_t order);
 bswabe_prv_t* bswabe_keygen(bswabe_pub_t* pub, bswabe_msk_t* msk, char** attributes);
-bswabe_cph_t* bswabe_enc(bswabe_pub_t* pub, gt_t m, char* policy);
+bswabe_cph_t* bswabe_enc(bswabe_pub_t* pub, gt_t m, bn_t s, char* policy);
 int bswabe_dec(bswabe_pub_t* pub, bswabe_prv_t* prv, bswabe_cph_t* cph, gt_t m);
 
 void bswabe_pub_free(bswabe_pub_t* pub);

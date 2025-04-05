@@ -35,6 +35,7 @@ file(GLOB EP_SRCS ep/*.c)
 file(GLOB EPX_SRCS epx/*.c)
 file(GLOB EB_SRCS eb/*.c)
 file(GLOB ED_SRCS ed/*.c)
+file(GLOB EP2_SRCS ep2/*.c)  # Added line to include EP2 source files
 file(GLOB PP_SRCS pp/*.c)
 file(GLOB BC_SRCS bc/*.c)
 file(GLOB MD_SRCS md/*.c)
@@ -98,6 +99,10 @@ endif()
 
 if (WITH_ED)
 	list(APPEND RELIC_SRCS ${ED_SRCS})
+endif()
+
+if (WITH_EP2)  # Added condition to include EP2 sources if WITH_EP2 is enabled
+	list(APPEND RELIC_SRCS ${EP2_SRCS})
 endif()
 
 if (WITH_PP)

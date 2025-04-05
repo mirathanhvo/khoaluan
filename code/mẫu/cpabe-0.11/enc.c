@@ -86,7 +86,7 @@ void encrypt_file(char* pub_file, char* in_file, char* out_file, char* policy) {
     printf("Public key element g in encryption:\n");
     ep_print(pub->g);
     printf("\nPublic key element gp in encryption:\n");
-    ep2_print(pub->gp);  // Sửa ở đây: dùng ep2_print cho phần tử G2
+    ep2_print(pub->gp);  // Dùng ep2_print cho phần tử G2
     printf("\n");
 
     /* 3. Đọc file input */
@@ -118,64 +118,85 @@ void encrypt_file(char* pub_file, char* in_file, char* out_file, char* policy) {
     }
     fclose(in_fp);
 
-    /* 4. Gọi bswabe_enc => CP-ABE tự sinh s và m */
-    gt_t m;
-    gt_new(m);
-    bswabe_cph_t* cph = bswabe_enc(pub, m, policy);
-    if (!cph || !cph->p) {
-        fprintf(stderr, "ERROR: Failed to build ciphertext policy tree. Check policy syntax!\n");
-        free(in_data);
-        bswabe_pub_free(pub);
-        gt_free(m);
-        core_clean();
-        exit(1);
-    }
+    /* 4. Tính giá trị M từ s và sinh AES key */
+    gt_t M;
+    gt_new(M);
 
-    /* 5. Dùng m để tạo AES key */
-    gt_norm(m); // chuẩn hoá GT element
-    int m_len = gt_size_bin(m, 1);
+    bn_t s;
+    bn_null(s);
+    bn_new(s);
+    bn_rand_mod(s, pub->order); // Tạo ngẫu nhiên s theo pub->order
+
+    // Debug: Print g and gp before pairing
+    printf("Enc: Public key elements before pairing:\n");
+    printf("g: ");
+    ep_print(pub->g);  // Corrected: Use ep_print for G1
+    printf("\n");
+    
+    printf("gp: ");
+    ep2_print(pub->gp);  // Corrected: Use ep2_print for G2
+    printf("\n");
+    
+    // Tính M = e(g, gp)^s
+    pc_map(M, pub->g, pub->gp); // M = e(g, gp)
+    gt_exp(M, M, s);            // M = e(g, gp)^s
+    gt_norm(M);                 // Chuẩn hóa M
+
+    // Sinh AES key từ giá trị M
+    int m_len = gt_size_bin(M, 1);
     uint8_t* m_buf = malloc(m_len);
     if (!m_buf) {
         fprintf(stderr, "Memory allocation failed for m_buf.\n");
         free(in_data);
         bswabe_pub_free(pub);
-        gt_free(m);
-        bswabe_cph_free(cph);
+        gt_free(M);
+        bn_free(s);
         core_clean();
         exit(1);
     }
-    gt_write_bin(m_buf, m_len, m, 1);
-
-    // Băm m_buf -> lấy 16 byte đầu làm aes_key
+    gt_write_bin(m_buf, m_len, M, 1);
     uint8_t hash[32];
-    unsigned int digest_len;
-    EVP_Digest(m_buf, m_len, hash, &digest_len, EVP_sha256(), NULL);
+    unsigned int digest_len; 
+    EVP_Digest(m_buf, m_len, hash, NULL, EVP_sha256(), NULL);
     uint8_t aes_key[16];
     memcpy(aes_key, hash, 16);
 
-    free(m_buf);
-    printf("AES key (enc, pack=1): ");
+    // Debug: Print AES key
+    printf("AES key (enc, final): ");
     for (int i = 0; i < 16; i++) {
         printf("%02x", aes_key[i]);
     }
     printf("\n");
+    free(m_buf);
+
+    /* 5. Gọi bswabe_enc với M và s đã tính */
+    bswabe_cph_t* cph = bswabe_enc(pub, M, s, policy);
+    if (!cph || !cph->p) {
+        fprintf(stderr, "ERROR: Failed to build ciphertext policy tree. Check policy syntax!\n");
+        free(in_data);
+        bswabe_pub_free(pub);
+        gt_free(M);
+        bn_free(s);
+        core_clean();
+        exit(1);
+    }
 
     /* 6. Sinh IV từ iv_rand */
-    bn_t iv_rand, order;
+    bn_t iv_rand, order_iv;
     bn_null(iv_rand);
-    bn_null(order);
+    bn_null(order_iv);
     bn_new(iv_rand);
-    bn_new(order);
-    ep_curve_get_ord(order);
-    bn_rand_mod(iv_rand, order);
+    bn_new(order_iv);
+    ep_curve_get_ord(order_iv);
+    bn_rand_mod(iv_rand, order_iv);
     int iv_bn_len = bn_size_bin(iv_rand);
     uint8_t *iv_buf = malloc(iv_bn_len);
     if (!iv_buf) {
         printf("Error: Memory allocation failed for IV buffer.\n");
         free(in_data);
         bswabe_pub_free(pub);
-        bn_free(iv_rand); bn_free(order);
-        gt_free(m);
+        bn_free(iv_rand); bn_free(order_iv);
+        gt_free(M);
         bswabe_cph_free(cph);
         core_clean();
         exit(1);
@@ -193,8 +214,8 @@ void encrypt_file(char* pub_file, char* in_file, char* out_file, char* policy) {
         printf("Error: Failed to initialize AES context.\n");
         free(in_data);
         bswabe_pub_free(pub);
-        bn_free(iv_rand); bn_free(order);
-        gt_free(m);
+        bn_free(iv_rand); bn_free(order_iv);
+        gt_free(M);
         bswabe_cph_free(cph);
         core_clean();
         exit(1);
@@ -205,8 +226,8 @@ void encrypt_file(char* pub_file, char* in_file, char* out_file, char* policy) {
         EVP_CIPHER_CTX_free(ctx);
         free(in_data);
         bswabe_pub_free(pub);
-        bn_free(iv_rand); bn_free(order);
-        gt_free(m);
+        bn_free(iv_rand); bn_free(order_iv);
+        gt_free(M);
         bswabe_cph_free(cph);
         core_clean();
         exit(1);
@@ -225,8 +246,8 @@ void encrypt_file(char* pub_file, char* in_file, char* out_file, char* policy) {
     /* 8. Serialize CP-ABE ciphertext */
     GByteArray* cph_buf = bswabe_cph_serialize(cph);
     bswabe_cph_free(cph);
-    gt_free(m);
-    bn_free(iv_rand); bn_free(order);
+    gt_free(M);
+    bn_free(iv_rand); bn_free(order_iv);
 
     printf("DEBUG (enc): ciphertext_len = %d, CP-ABE ciphertext length = %u\n", ciphertext_len, cph_buf->len);
     long total_enc = sizeof(iv) + sizeof(tag) + HEADER_SIZE + ciphertext_len + cph_buf->len;

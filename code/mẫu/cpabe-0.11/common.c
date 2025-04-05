@@ -360,4 +360,3 @@ void die(const char* fmt, ...) {
     va_end(args);
     exit(1);
 }
-

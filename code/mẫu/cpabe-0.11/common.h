@@ -3,7 +3,7 @@
 
 #include <relic/relic.h>
 #include <glib.h>
-
+#include <openssl/aes.h>
 #ifndef fp12_norm
 static inline void fp12_norm(fp12_t m) {
     // Chuyển phần tử FP12 m về dạng chuẩn bằng cách sử dụng fp12_conv_cyc.

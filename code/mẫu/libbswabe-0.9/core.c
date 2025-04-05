@@ -14,88 +14,58 @@
 #include "private.h"
 #include "common.h" 
 
-// nếu chưa có, thêm prototype
-void hash_attr(g1_t h, char* attr);
-void hash_attr2(g1_t h, char* attr);
-void print_bn(bn_t n);
-void print_g1(const char *label, g1_t a);
-void print_g2(const char *label, g2_t a);
-
-// định nghĩa hàm nếu chưa có
-void hash_attr(g1_t h, char* attr) {
-    uint8_t digest[SHA256_DIGEST_LENGTH];
-    SHA256((uint8_t*)attr, strlen(attr), digest);
-    g1_map(h, digest, SHA256_DIGEST_LENGTH);
-}
-
-void hash_attr2(g1_t h, char* attr) {
-    uint8_t digest[SHA256_DIGEST_LENGTH];
-    SHA256((uint8_t*)attr, strlen(attr), digest);
-    g1_map(h, digest, SHA256_DIGEST_LENGTH);
-}
-
 /*
  * bswabe_setup:
  *   - Khởi tạo khóa công khai (pub) và master secret key (msk) sử dụng RELIC.
  */
-void bswabe_setup(bswabe_pub_t** pub, bswabe_msk_t** msk) {
-    bn_t alpha, order;
-    g1_t g;
-    g2_t gp;
-
+void bswabe_setup(bswabe_pub_t** pub, bswabe_msk_t** msk, g1_t g, g2_t gp, bn_t alpha, bn_t beta, bn_t order) {
+    // Allocate memory for public and master secret keys
     *pub = malloc(sizeof(bswabe_pub_t));
     *msk = malloc(sizeof(bswabe_msk_t));
     if (!*pub || !*msk) {
         raise_error("Memory allocation failed in bswabe_setup()");
     }
 
-    bn_null(alpha); bn_new(alpha);
-    bn_null(order); bn_new(order);
-
-    g1_null(g); g1_new(g);
-    g2_null(gp); g2_new(gp);
-
-    g1_get_ord(order);
-    g1_rand(g);
-    g2_rand(gp);
-    bn_rand_mod(alpha, order);
-
-    bn_null((*msk)->beta); 
+    // Copy beta to master secret key
+    bn_null((*msk)->beta);
     bn_new((*msk)->beta);
-    bn_rand_mod((*msk)->beta, order);
+    bn_copy((*msk)->beta, beta);
 
+    // Compute g_alpha = gp^alpha
     g2_null((*msk)->g_alpha);
     g2_new((*msk)->g_alpha);
     g2_mul((*msk)->g_alpha, gp, alpha);
 
+    // Compute h = g^beta
     g1_null((*pub)->h);
     g1_new((*pub)->h);
-    g1_mul((*pub)->h, g, (*msk)->beta);
+    g1_mul((*pub)->h, g, beta);
 
+    // Compute e(g, g_alpha)
     gt_null((*pub)->g_hat_alpha);
     gt_new((*pub)->g_hat_alpha);
     pc_map((*pub)->g_hat_alpha, g, (*msk)->g_alpha);
 
+    // Copy g, gp, and order to public key
     g1_null((*pub)->g);
     g1_new((*pub)->g);
+    g1_copy((*pub)->g, g);
+
     g2_null((*pub)->gp);
     g2_new((*pub)->gp);
-    g1_copy((*pub)->g, g);
     g2_copy((*pub)->gp, gp);
 
     bn_null((*pub)->order);
     bn_new((*pub)->order);
     bn_copy((*pub)->order, order);
 
-    // Debug prints
+    // Debug output
     printf("Setup Phase:\n");
-    printf("α: ");
-    print_bn(alpha);  
-    printf("β: ");
-    print_bn((*msk)->beta);
-    print_g1("g1", g);
-    print_g2("g2", gp);
-    print_g1("h = g1^β", (*pub)->h);
+    printf("α: "); bn_print(alpha); printf("\n");
+    printf("β: "); bn_print(beta); printf("\n");
+    printf("g1: "); g1_print(g); printf("\n");
+    printf("g2: "); g2_print(gp); printf("\n");
+    printf("h = g1^β: "); g1_print((*pub)->h); printf("\n");
     printf("e(g1, g2)^α: ");
     int gt_size = gt_size_bin((*pub)->g_hat_alpha, 1);
     uint8_t* gt_buf = malloc(gt_size);
@@ -108,11 +78,6 @@ void bswabe_setup(bswabe_pub_t** pub, bswabe_msk_t** msk) {
     }
     printf("\n");
     free(gt_buf);
-
-    bn_free(alpha);
-    bn_free(order);
-    g1_free(g);
-    g2_free(gp);
 }
 
 /*
@@ -208,10 +173,10 @@ bswabe_prv_t* bswabe_keygen(bswabe_pub_t* pub, bswabe_msk_t* msk, char** attribu
 
         // --- Bổ sung in ra thông tin cho mỗi thành phần thuộc tính ---
         printf("Keygen: Attribute: %s\n", c.attr);
-        print_g1("  dp", c.dp);
-        print_g2("  d", c.d);
-        print_g1("  zp", c.zp);
-        print_g2("  z", c.z);
+        printf("  dp: "); g1_print(c.dp); printf("\n");
+        printf("  d: "); g2_print(c.d); printf("\n");
+        printf("  zp: "); g1_print(c.zp); printf("\n");
+        printf("  z: "); g2_print(c.z); printf("\n");
         // -------------------------------------------------------
 
         g_array_append_val(prv->comps, c);

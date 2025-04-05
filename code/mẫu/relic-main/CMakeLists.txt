@@ -4,6 +4,13 @@ if(NOT ${CMAKE_VERSION} VERSION_LESS "3.1")
 endif()
 
 project(RELIC C CXX)
+
+option(WITH_EP "Enable support for G1 operations (ep_t)" ON)
+option(WITH_EP2 "Enable support for G2 operations (ep2_t)" ON)
+option(WITH_FPX "Enable support for prime field extensions" ON)
+option(WITH_EB "Enable support for binary elliptic curves" OFF)
+option(WITH_ED "Enable support for Edwards elliptic curves" OFF)
+
 set(PROJECT_VERSION_MAJOR "0")
 set(PROJECT_VERSION_MINOR "7")
 set(PROJECT_VERSION_PATCH "0")

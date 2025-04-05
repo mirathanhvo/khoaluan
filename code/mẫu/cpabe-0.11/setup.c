@@ -57,12 +57,96 @@ int main(int argc, char** argv) {
         uint8_t seed[20] = "deterministic_seed";
         rand_seed(seed, 20);
     }
+
+    printf("Step 1: rand_init\n");
+    fflush(stdout);
     rand_init();
+
+    printf("Step 2: g2_new\n");
+    fflush(stdout);
+    g2_t g2;
+    g2_null(g2);    // BẮT BUỘC: Initialize g2 to avoid undefined behavior
+    g2_new(g2);     // Allocate memory for g2
+
+    printf("Step 3: g2_rand\n");
+    fflush(stdout);
+    g2_rand(g2);    // Generate a random element in G2
+
+   // Manually set g2 as the generator for G2
+    ep2_t g2_gen;
+    ep2_null(g2_gen);
+    ep2_new(g2_gen);
+    ep2_copy(g2_gen, g2);  // Copy the generated g2 to g2_gen
+    printf("Step 4: Done rand g2\n");
+    fflush(stdout);
+
+    // Generate a random beta
+    bn_t beta;
+    bn_new(beta);
+    bn_rand_mod(beta, order);  // Generate beta randomly within the group order
+
+    // Compute inv_beta = 1 / beta mod order
+    bn_t inv_beta;
+    bn_null(inv_beta);
+    bn_new(inv_beta);
+
+    // Use bn_mod_inv for modular inversion
+    bn_mod_inv(inv_beta, beta, order);  // Compute inv_beta = beta^(-1) mod order
+
+    // Compute g2^(1/beta) in G2
+    ep2_t g2_exp_result;
+    ep2_new(g2_exp_result);
+    ep2_mul(g2_exp_result, g2, inv_beta);  // Corrected: Use ep2_mul for scalar multiplication in G2
+
+    // Debug: Print the computed values
+    printf("g2^(1/beta) in G2 = ");
+    ep2_print(g2_exp_result);  // Corrected: Use ep2_print for G2
+    printf("\n");
+
+    // Convert g2_exp_result (G2) to bytes
+    uint8_t buf[128];
+    int len = ep2_size_bin(g2_exp_result, 1);  // 1: compressed
+    ep2_write_bin(buf, len, g2_exp_result, 1);
+
+    // Map to G1
+    ep_t g1;
+    ep_new(g1);
+    ep_map(g1, buf, len);  // Hash the byte array into G1
+
+    // Debug: Print the computed g1
+    printf("g1 = ");
+    ep_print(g1);
+    printf("\n");
+
+    // Perform pairing
+    gt_t pairing_result;
+    gt_new(pairing_result);
+    pc_map(pairing_result, g1, g2_exp_result);  // Pairing e(g1, g2_exp_result)
+
+    // Debug: Print the pairing result
+    printf("e(g1, g2) = ");
+    gt_print(pairing_result);
+    printf("\n");
+
+    // Free temporary variables
+    bn_free(inv_beta);
+    ep2_free(g2_exp_result);
+    ep_free(g1);
+    gt_free(pairing_result);
+
+    // Initialize alpha
+    bn_t alpha;
+    bn_null(alpha);
+    bn_new(alpha);
+    bn_rand_mod(alpha, order);  // Generate a random alpha
 
     // Gọi bswabe_setup
     bswabe_pub_t* pub = NULL;
     bswabe_msk_t* msk = NULL;
-    bswabe_setup(&pub, &msk);
+    bswabe_setup(&pub, &msk, g1, g2, alpha, beta, order);
+
+    // Free alpha after use
+    bn_free(alpha);
 
     // Debug: kiểm tra nếu msk không tồn tại
     if (!msk) {

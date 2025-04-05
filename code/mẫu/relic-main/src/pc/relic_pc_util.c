@@ -302,19 +302,12 @@ int g2_is_valid(const g2_t a) {
 			case EP_B12:
 			case EP_B24:
 			case EP_B48:
-				if (core_get()->ep_id == B12_383) {
-					/* Since p mod n = r, we can check instead that
-					* psi^4(P) + P == \psi^2(P). */
-					g2_frb(u, a, 4);
-					g2_add(u, u, a);
-					g2_frb(v, a, 2);
-				} else {
-				/* Check \psi(P) == [z]P. */
-					fp_prime_get_par(n);
-					g2_mul_any(u, a, n);
-					g2_frb(v, a, 1);
-				}
+			/* Check \psi(P) == [z]P. */
+				fp_prime_get_par(n);
+				g2_mul_any(u, a, n);
+				g2_frb(v, a, 1);
 				r = g2_on_curve(a) && (g2_cmp(u, v) == RLC_EQ);
+
 				break;
 			/* Formulas from "Fast Subgroup Membership Testings for G1,
 			 * G2 and GT on Pairing-friendly Curves" by Dai et al.
@@ -488,18 +481,13 @@ int gt_is_valid(const gt_t a) {
 			/* Formulas from "Families of SNARK-friendly 2-chains of
 			 * elliptic curves" by Housni and Guillevic.
 			 * https://eprint.iacr.org/2021/1359.pdf */
-			case EP_B12:
-				if (core_get()->ep_id == B12_383) {
-					/* GT-strong, so test for cyclotomic only. */
-					r = 1;
-				} else {
-					/* Check that a^u = a^p. */
-					gt_frb(u, a, 1);
-					fp12_exp_cyc_sps((void *)v, (void *)a, b, l, bn_sign(n));
-					r = (gt_cmp(u, v) == RLC_EQ);
-				}
+			 case EP_B12:
+				/* Check that a^u = a^p. */
+				gt_frb(u, a, 1);
+				fp12_exp_cyc_sps((void *)v, (void *)a, b, l, bn_sign(n));
+				r = (gt_cmp(u, v) == RLC_EQ);
 				r &= fp12_test_cyc((void *)a);
-				break;
+			 	break;		 
 			case EP_B24:
 				/* Check that a^u = a^p. */
 				gt_frb(u, a, 1);

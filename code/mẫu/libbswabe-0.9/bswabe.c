@@ -17,18 +17,6 @@
  #include <stdarg.h>
  #include <stdio.h>
  
- /* 
-    ĐÃ XÓA: 
-    - char last_error[256];
-    - char* bswabe_error();
-    - void raise_error(...);
-    - void element_from_string(...);
-    - void element_from_string_g2(...);
-    vì chúng đã được định nghĩa trong common.c
- */
- 
- void print_bn(bn_t bn);
-
  /* ======= Hàm khởi tạo nút policy ======= */
  bswabe_policy_t* base_node(int k, char* s) {
      bswabe_policy_t* p = malloc(sizeof(bswabe_policy_t));
@@ -549,36 +537,22 @@ void pick_sat_min_leaves(bswabe_policy_t* p, bswabe_prv_t* prv) {
 }
  
  /* ======= bswabe_enc: mã hóa ======= */
- bswabe_cph_t* bswabe_enc(bswabe_pub_t* pub, gt_t m, char* policy) {
+ bswabe_cph_t* bswabe_enc(bswabe_pub_t* pub, gt_t m, bn_t s, char* policy) {
+    // Allocate memory for the ciphertext structure
     bswabe_cph_t* cph = malloc(sizeof(bswabe_cph_t));
-    if (!cph) return NULL;
-
-    bn_t s;
-    bn_null(s); 
-    bn_new(s);
-    do {
-        bn_rand_mod(s, pub->order);
-    } while (bn_is_zero(s));
-
-    // Debug: Print the value of s
-    int s_size = bn_size_bin(s);
-    uint8_t* s_buf = malloc(s_size);
-    bn_write_bin(s_buf, s_size, s);
-    printf("Value of s: ");
-    for (int i = 0; i < s_size; i++) {
-        printf("%02x", s_buf[i]);
+    if (!cph) {
+        fprintf(stderr, "ERROR: Memory allocation failed for bswabe_cph_t.\n");
+        return NULL;
     }
-    printf("\n");
-    free(s_buf);
-
-    // Use the caller-provided m variable
-    pc_map(m, pub->g, pub->gp);    // m = e(g, gp)
-    gt_exp(m, m, s);               // m = m^s = e(g, gp)^s
-    gt_norm(m);                    // Normalize m
 
     // Debug: Print the value of m
     int buf_len = gt_size_bin(m, 1);
     uint8_t* buf = malloc(buf_len);
+    if (!buf) {
+        fprintf(stderr, "Memory allocation failed for debug buffer.\n");
+        free(cph);
+        return NULL;
+    }
     gt_write_bin(buf, buf_len, m, 1);
     printf("Value of m (enc): ");
     for (int i = 0; i < buf_len; i++) {
@@ -587,30 +561,36 @@ void pick_sat_min_leaves(bswabe_policy_t* p, bswabe_prv_t* prv) {
     printf("\n");
     free(buf);
 
-    // cph->cs = m * e(pub->g_hat_alpha, s)
+    // Compute cs = m * e(pub->g_hat_alpha, s)
+    gt_null(cph->cs);
     gt_new(cph->cs);
     gt_t tmp;
+    gt_null(tmp);
     gt_new(tmp);
     gt_exp(tmp, pub->g_hat_alpha, s); // tmp = e(g_hat_alpha, s)
     gt_mul(cph->cs, m, tmp);          // cph->cs = m * tmp
     gt_free(tmp);
 
+    // Compute c = h^s
+    g1_null(cph->c);
     g1_new(cph->c);
     g1_mul(cph->c, pub->h, s);        // cph->c = h^s
 
     // Parse the policy string into a policy tree
     bswabe_policy_t* root = parse_policy_postfix(policy);
     if (!root) {
+        fprintf(stderr, "ERROR: Failed to parse policy string.\n");
         free(cph);
-        bn_free(s);
         return NULL;
     }
     cph->p = root;
     cph->policy = strdup(policy); // Save the original policy string
 
+    // Share the secret s according to the policy tree
     fill_policy(cph->p, pub, s);
 
+    // If s is no longer needed, free it
     bn_free(s);
+
     return cph;
 }
-
