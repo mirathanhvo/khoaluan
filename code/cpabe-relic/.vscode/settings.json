@@ -1,0 +1,13 @@
+{
+    "files.associations": {
+        "relic.h": "c",
+        "bswabe.h": "c",
+        "private.h": "c",
+        "common.h": "c",
+        "relic_pc.h": "c",
+        "relic_fpx.h": "c",
+        "relic_core.h": "c",
+        "relic_bn.h": "c"
+    },
+    "cmake.sourceDirectory": "D:/Tài liệu học của Mira/khoaluan/code/cpabe-relic/relic-main"
+}

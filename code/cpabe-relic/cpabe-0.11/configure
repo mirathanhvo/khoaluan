@@ -1,0 +1,45 @@
+#!/bin/sh
+
+# Configuration script for CP-ABE
+
+# Check for necessary dependencies
+AC_DEFUN([CHECK_DEPS],
+[
+    AC_MSG_CHECKING(for required libraries)
+    PKG_CHECK_MODULES([GLIB], [glib-2.0])
+    PKG_CHECK_MODULES([GMP], [gmp])
+    PKG_CHECK_MODULES([RELIC], [relic])
+    PKG_CHECK_MODULES([BSWABE], [libbswabe])
+    AC_MSG_RESULT(done)
+])
+
+# Set up include and library paths
+AC_ARG_WITH(
+  relic-include,
+  AC_HELP_STRING([--with-relic-include=DIR], [Path to RELIC headers]),
+  [RELIC_CFLAGS="-I$withval"],
+  [RELIC_CFLAGS="-I/usr/local/include"])
+
+AC_ARG_WITH(
+  relic-lib,
+  AC_HELP_STRING([--with-relic-lib=DIR], [Path to RELIC libraries]),
+  [RELIC_LIBS="-L$withval -lrelic"],
+  [RELIC_LIBS="-L/usr/local/lib -lrelic"])
+
+AC_ARG_WITH(
+  bswabe-include,
+  AC_HELP_STRING([--with-bswabe-include=DIR], [Path to BSWABE headers]),
+  [BSWABE_CFLAGS="-I$withval"],
+  [BSWABE_CFLAGS="-I/usr/local/include"])
+
+AC_ARG_WITH(
+  bswabe-lib,
+  AC_HELP_STRING([--with-bswabe-lib=DIR], [Path to BSWABE libraries]),
+  [BSWABE_LIBS="-L$withval -lbswabe"],
+  [BSWABE_LIBS="-L/usr/local/lib -lbswabe"])
+
+# Final setup
+CFLAGS="$CFLAGS $RELIC_CFLAGS $BSWABE_CFLAGS $GMP_CFLAGS $GLIB_CFLAGS"
+LIBS="$LIBS $RELIC_LIBS $BSWABE_LIBS $GMP_LIBS $GLIB_LIBS"
+
+AC_OUTPUT
